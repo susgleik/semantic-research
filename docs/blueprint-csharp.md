@@ -1,7 +1,7 @@
 # Proyecto F — Sistema de Búsqueda Semántica RAG
 ## Blueprint completo en C# / .NET 8
 
-**Stack:** ASP.NET Core 8 · Azure Functions v4 (isolated worker) · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps
+**Stack:** ASP.NET Core 10 · Azure Functions v4 (isolated worker) · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps
 
 ---
 
