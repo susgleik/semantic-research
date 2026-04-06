@@ -1,0 +1,29 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.ncrunchproject
+
+## User secrets
+secrets.json
+appsettings.*.local.json
+
+## Azure Functions local settings (contienen credenciales)
+local.settings.json
+
+## Docker
+.dockerignore
+
+## Build output
+publish/
+*.zip
+
+## OS
+.DS_Store
+Thumbs.db
+
+## IDE
+.idea/
+*.swp

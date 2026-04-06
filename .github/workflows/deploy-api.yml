@@ -1,0 +1,47 @@
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/SemanticSearch.Api/**"
+      - "src/SemanticSearch.Core/**"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore src/SemanticSearch.Api/SemanticSearch.Api.csproj
+
+      - name: Build
+        run: dotnet build src/SemanticSearch.Api/SemanticSearch.Api.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/SemanticSearch.Api.Tests/ --no-build -c Release
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push image
+        run: |
+          az acr build \
+            --registry ${{ vars.ACR_NAME }} \
+            --image semantic-search-api:${{ github.sha }} \
+            ./src/SemanticSearch.Api
+
+      - name: Update Container App revision
+        run: |
+          az containerapp update \
+            --name semantic-search-api \
+            --resource-group ${{ vars.RESOURCE_GROUP }} \
+            --image ${{ vars.ACR_NAME }}.azurecr.io/semantic-search-api:${{ github.sha }}
