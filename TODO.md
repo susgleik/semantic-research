@@ -12,10 +12,10 @@
 - [x] Crear `SemanticSearch.Functions.csproj` (Azure Functions v4)
 - [x] Crear `SemanticSearch.McpServer.csproj` (MCP Server)
 - [x] Crear proyectos de tests `.csproj`
-- [ ] Inicializar repositorio git
-- [ ] Configurar `.gitignore` para .NET
-- [ ] Configurar `dotnet user-secrets` para credenciales locales
-- [ ] Restaurar paquetes NuGet (`dotnet restore`)
+- [X] Inicializar repositorio git
+- [X] Configurar `.gitignore` para .NET
+- [X] Configurar `dotnet user-secrets` para credenciales locales
+- [X] Restaurar paquetes NuGet (`dotnet restore`)
 
 ---
 
