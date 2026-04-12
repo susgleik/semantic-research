@@ -1,4 +1,5 @@
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Options;
 using SemanticSearch.Core.Options;
 
@@ -29,7 +30,7 @@ public class BlobService(
     public async Task DeleteAsync(string docId, CancellationToken ct = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(_container);
-        await foreach (var blob in containerClient.GetBlobsAsync(prefix: docId, cancellationToken: ct))
+        await foreach (var blob in containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, prefix: docId, cancellationToken: ct))
         {
             await containerClient.DeleteBlobIfExistsAsync(blob.Name, cancellationToken: ct);
         }
