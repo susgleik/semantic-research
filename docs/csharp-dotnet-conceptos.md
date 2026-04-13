@@ -285,4 +285,63 @@ SemanticSearch.sln          ← agrupa todo (= workspace de VS Code / monorepo)
 
 ---
 
+---
+
+## 13. Primary Constructors — constructor en la firma de la clase
+
+Feature de **C# 12** (.NET 8+). Permite declarar los parámetros del constructor directamente en la línea de la clase, eliminando el boilerplate de declarar campos privados y asignarlos.
+
+### Antes (C# clásico)
+
+```csharp
+public class BlobService : IBlobService
+{
+    private readonly BlobServiceClient _blobServiceClient;
+    private readonly IOptions<BlobOptions> _opts;
+    private readonly ILogger<BlobService> _logger;
+
+    public BlobService(
+        BlobServiceClient blobServiceClient,
+        IOptions<BlobOptions> opts,
+        ILogger<BlobService> logger)
+    {
+        _blobServiceClient = blobServiceClient;
+        _opts = opts;
+        _logger = logger;
+    }
+}
+```
+
+### Con Primary Constructor (C# 12+)
+
+```csharp
+public class BlobService(
+    BlobServiceClient blobServiceClient,
+    IOptions<BlobOptions> opts,
+    ILogger<BlobService> logger) : IBlobService
+{
+    // blobServiceClient, opts y logger disponibles en todo el cuerpo
+    // sin declarar campos ni asignar — el compilador lo genera
+}
+```
+
+El compilador genera los campos y la asignación internamente. Es **azúcar sintáctico** puro.
+
+### Cómo interactúa con DI
+
+El sistema de DI no distingue entre constructor clásico y primary constructor.
+Al registrar `builder.Services.AddScoped<IBlobService, BlobService>()`, .NET inspecciona
+los parámetros y los inyecta automáticamente porque ya están registrados en el contenedor.
+
+### Origen: los `record` siempre lo tuvieron
+
+```csharp
+// record — primary constructor de siempre
+public record QueryRequest(string Query, int TopK = 5);
+```
+
+C# 12 extendió esa misma idea a las `class` normales. Es la misma sintaxis.
+
+---
+
 _Stack de este proyecto: ASP.NET Core 10 · Azure Functions v4 · Azure AI Search · Azure OpenAI · .NET 10_

@@ -1,5 +1,5 @@
 # TODO — Proyecto F: Sistema de Búsqueda Semántica RAG
-## C# / .NET 8 · ASP.NET Core · Azure Functions v4 · Azure AI Search · Azure OpenAI
+## C# / .NET 10 · ASP.NET Core · Azure Functions v4 · Azure AI Search · Azure OpenAI
 
 ---
 
@@ -54,7 +54,7 @@
 ### 2d — Endpoints (Minimal API)
 - [x] `Endpoints/UploadEndpoints.cs` — `POST /upload`
 - [x] `Endpoints/QueryEndpoints.cs` — `POST /query`
-- [ ] `Endpoints/DocumentEndpoints.cs` — `GET /documents`, `POST /reindex/{docId}`
+- [x] `Endpoints/DocumentEndpoints.cs` — `GET /documents`, `POST /reindex/{docId}`
 - [x] `Endpoints/HealthEndpoints.cs` — `GET /health`
 
 ### 2e — Middleware
@@ -76,7 +76,7 @@
 - [x] `Functions/DocumentIndexer.cs` — blob trigger → chunk → embed → index
 - [x] `Services/ChunkerService.cs` — sliding window con overlap
 - [x] `Services/EmbeddingService.cs` — batch embeddings con Azure OpenAI
-- [ ] `Services/SearchIndexerService.cs` — escribe chunks indexados en Azure AI Search
+- [x] `Services/SearchIndexerService.cs` — escribe chunks indexados en Azure AI Search
 - [ ] Agregar soporte para `.pdf` con **PdfPig**
 - [ ] Agregar soporte para `.docx` con **DocumentFormat.OpenXml**
 - [ ] Manejar errores de indexación con dead-letter queue o poison blob
@@ -87,8 +87,8 @@
 
 - [x] `Program.cs` — host del servidor MCP
 - [x] `Tools/SearchDocumentsTool.cs` — herramienta `search_documents`
-- [ ] `Tools/ListDocumentsTool.cs` — herramienta `list_documents`
-- [ ] `Tools/ReindexDocumentTool.cs` — herramienta `reindex_document`
+- [x] `Tools/ListDocumentsTool.cs` — herramienta `list_documents`
+- [x] `Tools/ReindexDocumentTool.cs` — herramienta `reindex_document`
 - [ ] Configurar `.vscode/settings.json` con `github.copilot.chat.mcpServers`
 - [ ] Probar integración con Copilot Chat (`@doc-search`)
 
@@ -99,7 +99,7 @@
 ### API Tests (`SemanticSearch.Api.Tests`)
 - [ ] `Endpoints/QueryEndpointsTests.cs` — test del flujo RAG completo (mock servicios)
 - [ ] `Endpoints/UploadEndpointsTests.cs` — test de upload con validaciones
-- [ ] `Services/RagServiceTests.cs` — unit test del orquestador RAG
+- [x] `Services/RagServiceTests.cs` — unit test del orquestador RAG
 
 ### Functions Tests (`SemanticSearch.Functions.Tests`)
 - [ ] `DocumentIndexerTests.cs` — test del indexer con blob simulado
@@ -152,4 +152,4 @@
 
 ---
 
-_Stack: ASP.NET Core 8 · Azure Functions v4 · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps · Bicep · GitHub Actions_
+_Stack: ASP.NET Core 10 · Azure Functions v4 · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps · Bicep · GitHub Actions_
