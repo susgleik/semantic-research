@@ -55,4 +55,41 @@ public class SearchService(
         logger.LogInformation("Hybrid search returned {Count} chunks", chunks.Count);
         return chunks;
     }
+
+    public async Task<IReadOnlyList<DocumentRecord>> ListDocumentsAsync(
+        int skip = 0,
+        int top = 20,
+        CancellationToken ct = default)
+    {
+        // El índice almacena chunks; recuperamos suficientes para cubrir todos los documentos únicos.
+        var options = new SearchOptions
+        {
+            Size = 1000,
+            Select = { "doc_id", "filename" }
+        };
+
+        var response = await searchClient.SearchAsync<SearchDocument>("*", options, ct);
+
+        var seen    = new HashSet<string>();
+        var records = new List<DocumentRecord>();
+
+        await foreach (var result in response.Value.GetResultsAsync())
+        {
+            var docId = result.Document["doc_id"].ToString()!;
+            if (seen.Add(docId))
+            {
+                records.Add(new DocumentRecord(
+                    DocId:     docId,
+                    Filename:  result.Document["filename"].ToString()!,
+                    Category:  string.Empty,
+                    Status:    "indexed",
+                    BlobUrl:   string.Empty,
+                    IndexedAt: DateTimeOffset.MinValue
+                ));
+            }
+        }
+
+        logger.LogInformation("ListDocuments returned {Count} unique documents", records.Count);
+        return records.Skip(skip).Take(top).ToList();
+    }
 }

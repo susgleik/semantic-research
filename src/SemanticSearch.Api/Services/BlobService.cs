@@ -35,4 +35,27 @@ public class BlobService(
             await containerClient.DeleteBlobIfExistsAsync(blob.Name, cancellationToken: ct);
         }
     }
+
+    public async Task TriggerReindexAsync(string docId, CancellationToken ct = default)
+    {
+        var containerClient = blobServiceClient.GetBlobContainerClient(_container);
+
+        // La convención de nombre es {category}/{docId}/{filename}; buscamos por segmento.
+        await foreach (var blobItem in containerClient.GetBlobsAsync(cancellationToken: ct))
+        {
+            if (!blobItem.Name.Contains($"/{docId}/"))
+                continue;
+
+            var blobClient = containerClient.GetBlobClient(blobItem.Name);
+
+            // Re-subir el mismo contenido dispara el blob trigger de la Azure Function.
+            var download = await blobClient.DownloadContentAsync(ct);
+            await blobClient.UploadAsync(download.Value.Content, overwrite: true, ct);
+
+            logger.LogInformation("Reindex triggered for blob {BlobName}", blobItem.Name);
+            return;
+        }
+
+        throw new KeyNotFoundException($"No blob found for document '{docId}'");
+    }
 }
