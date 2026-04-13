@@ -2,12 +2,14 @@ using Azure;
 using Azure.AI.OpenAI;
 using Azure.Search.Documents;
 using Azure.Storage.Blobs;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
 using Scalar.AspNetCore;
 using SemanticSearch.Api.Endpoints;
 using SemanticSearch.Api.Middleware;
 using SemanticSearch.Api.Services;
+using System.Threading.RateLimiting;
 using CoreOptions = SemanticSearch.Core.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -56,16 +58,36 @@ builder.Services.AddScoped<ISearchService, SearchService>();
 builder.Services.AddScoped<IBlobService, BlobService>();
 builder.Services.AddScoped<IRagService, RagService>();
 
-// ── Auth Azure AD (solo en Production) ───────────────────────────────────────
+// ── Auth Azure AD ─────────────────────────────────────────────────────────────
+// En Production se valida JWT con Azure AD.
+// En Development se registran los servicios base sin esquema → todos los requests pasan.
 if (!builder.Environment.IsDevelopment())
-{
     builder.Services.AddMicrosoftIdentityWebApiAuthentication(builder.Configuration);
-    builder.Services.AddAuthorization();
-}
+else
+    builder.Services.AddAuthentication(); // registra IAuthenticationSchemeProvider sin esquemas
+
+builder.Services.AddAuthorization();
 
 // ── OpenAPI / Scalar (solo en Development) ────────────────────────────────────
 if (builder.Environment.IsDevelopment())
     builder.Services.AddOpenApi();
+
+// ── Rate limiting (.NET 10 built-in) ─────────────────────────────────────────
+// Límite por IP: 100 requests/minuto en ventana fija, cola de hasta 10.
+builder.Services.AddRateLimiter(options =>
+{
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit          = 100,
+                Window               = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit           = 10
+            }));
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 
 // ── Logging estructurado ──────────────────────────────────────────────────────
 builder.Logging.AddConsole();
@@ -79,12 +101,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseMiddleware<ExceptionMiddleware>();
+app.UseRateLimiter();
 
-if (!app.Environment.IsDevelopment())
-{
-    app.UseAuthentication();
-    app.UseAuthorization();
-}
+app.UseAuthentication();
+app.UseAuthorization();
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
 app.MapUploadEndpoints();
