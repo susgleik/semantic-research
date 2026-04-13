@@ -1,7 +1,6 @@
 using Azure;
 using Azure.AI.OpenAI;
-using Azure.Search.Documents;
-using Azure.Storage.Blobs;
+using Azure.Search.Documents.Indexes;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
