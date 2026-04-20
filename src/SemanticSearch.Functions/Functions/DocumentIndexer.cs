@@ -1,7 +1,11 @@
+using System.Text;
 using Azure.Storage.Blobs;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
 using SemanticSearch.Functions.Services;
+using UglyToad.PdfPig;
 
 namespace SemanticSearch.Functions.Functions;
 
@@ -40,11 +44,29 @@ public class DocumentIndexer(
     private static string ExtractText(byte[] content, string filename) =>
         Path.GetExtension(filename).ToLowerInvariant() switch
         {
-            ".txt"  => System.Text.Encoding.UTF8.GetString(content),
-            // TODO: agregar PdfPig para PDF
-            // ".pdf"  => ExtractPdfText(content),
-            // TODO: agregar DocumentFormat.OpenXml para DOCX
-            // ".docx" => ExtractDocxText(content),
+            ".txt"  => Encoding.UTF8.GetString(content),
+            ".pdf"  => ExtractPdfText(content),
+            ".docx" => ExtractDocxText(content),
             _       => throw new NotSupportedException($"Unsupported file type: {filename}")
         };
+
+    private static string ExtractPdfText(byte[] content)
+    {
+        using var document = PdfDocument.Open(content);
+        var sb = new StringBuilder();
+        foreach (var page in document.GetPages())
+            sb.AppendLine(string.Join(' ', page.GetWords().Select(w => w.Text)));
+        return sb.ToString();
+    }
+
+    private static string ExtractDocxText(byte[] content)
+    {
+        using var stream = new MemoryStream(content);
+        using var doc   = WordprocessingDocument.Open(stream, isEditable: false);
+        var body = doc.MainDocumentPart?.Document?.Body;
+        if (body is null) return string.Empty;
+        return string.Join('\n', body.Descendants<Paragraph>()
+            .Select(p => p.InnerText)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+    }
 }
