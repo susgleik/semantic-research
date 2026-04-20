@@ -62,9 +62,9 @@
 - [ ] `Middleware/AuthMiddleware.cs` — validación Azure AD JWT (ya cubierto por `Microsoft.Identity.Web`)
 
 ### 2f — Validaciones y mejoras
-- [ ] Agregar validación de tamaño máximo de archivo en `/upload`
-- [ ] Agregar soporte de paginación en `GET /documents`
-- [ ] Agregar rate limiting con `AspNetCoreRateLimit` o .NET 8 built-in
+- [x] Agregar validación de tamaño máximo de archivo en `/upload`
+- [x] Agregar soporte de paginación en `GET /documents`
+- [x] Agregar rate limiting con .NET 10 built-in (`PartitionedRateLimiter`, 100 req/min por IP)
 
 ---
 
@@ -97,13 +97,14 @@
 ## Fase 5 — Tests
 
 ### API Tests (`SemanticSearch.Api.Tests`)
-- [ ] `Endpoints/QueryEndpointsTests.cs` — test del flujo RAG completo (mock servicios)
-- [ ] `Endpoints/UploadEndpointsTests.cs` — test de upload con validaciones
+- [x] `Endpoints/QueryEndpointsTests.cs` — test del flujo RAG completo (mock servicios)
+- [x] `Endpoints/UploadEndpointsTests.cs` — test de upload con validaciones
 - [x] `Services/RagServiceTests.cs` — unit test del orquestador RAG
+- [x] `ApiWebApplicationFactory.cs` — factory compartida con PassThroughAuthHandler y mocks
 
 ### Functions Tests (`SemanticSearch.Functions.Tests`)
-- [ ] `DocumentIndexerTests.cs` — test del indexer con blob simulado
-- [ ] Test de `ChunkerService` — validar sliding window y overlap
+- [x] `DocumentIndexerTests.cs` — tests de ChunkerService (sliding window, overlap, edge cases)
+- [x] Test de `ChunkerService` — 6 casos: ventana exacta, ventana+1, overlap, StartIndex, texto vacío
 
 ---
 
