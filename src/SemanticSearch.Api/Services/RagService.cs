@@ -1,5 +1,5 @@
-using Azure.AI.OpenAI;
 using Microsoft.Extensions.Options;
+using OpenAI;
 using OpenAI.Chat;
 using SemanticSearch.Api.Models;
 using SemanticSearch.Core.Options;
@@ -9,7 +9,7 @@ namespace SemanticSearch.Api.Services;
 public class RagService(
     IEmbeddingService embeddings,
     ISearchService search,
-    AzureOpenAIClient openAiClient,
+    OpenAIClient openAiClient,
     IOptions<OpenAIOptions> opts,
     ILogger<RagService> logger) : IRagService
 {

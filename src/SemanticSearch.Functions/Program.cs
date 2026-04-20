@@ -1,6 +1,6 @@
 using Azure;
-using Azure.AI.OpenAI;
 using Azure.Search.Documents.Indexes;
+using OpenAI;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -15,7 +15,7 @@ var host = new HostBuilder()
         var config = ctx.Configuration;
 
         services.AddOptions<OpenAIOptions>()
-            .BindConfiguration("AzureOpenAI")
+            .BindConfiguration("OpenAI")
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
@@ -27,7 +27,7 @@ var host = new HostBuilder()
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<OpenAIOptions>>().Value;
-            return new AzureOpenAIClient(new Uri(opts.Endpoint), new AzureKeyCredential(opts.ApiKey));
+            return new OpenAIClient(opts.ApiKey);
         });
 
         services.AddSingleton(sp =>

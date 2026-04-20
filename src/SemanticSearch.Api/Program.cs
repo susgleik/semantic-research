@@ -1,7 +1,7 @@
 using Azure;
-using Azure.AI.OpenAI;
 using Azure.Search.Documents;
 using Azure.Storage.Blobs;
+using OpenAI;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Microsoft.Identity.Web;
@@ -17,7 +17,7 @@ var builder = WebApplication.CreateBuilder(args);
 // ── Options (strongly-typed, validados al arrancar) ──────────────────────────
 builder.Services
     .AddOptions<CoreOptions.OpenAIOptions>()
-    .BindConfiguration("AzureOpenAI")
+    .BindConfiguration("OpenAI")
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
@@ -33,11 +33,11 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
-// ── Azure clients (singleton — reusan connection pool) ───────────────────────
+// ── Clientes (singleton — reusan connection pool) ────────────────────────────
 builder.Services.AddSingleton(sp =>
 {
     var opts = sp.GetRequiredService<IOptions<CoreOptions.OpenAIOptions>>().Value;
-    return new AzureOpenAIClient(new Uri(opts.Endpoint), new AzureKeyCredential(opts.ApiKey));
+    return new OpenAIClient(opts.ApiKey);
 });
 
 builder.Services.AddSingleton(sp =>
