@@ -3,17 +3,20 @@
 
 ---
 
-## Servicios Azure — qué se puede emular y qué no
+## Servicios externos — qué se puede emular y qué no
 
 | Servicio | Emulable local | Herramienta | Necesita credenciales reales |
 |---|---|---|---|
 | Azure Blob Storage | SI | **Azurite** (Docker) | No en dev |
 | Azure AI Search | **NO** | sin emulador oficial | **SI — siempre** |
-| Azure OpenAI | **NO** | sin emulador oficial | **SI — siempre** |
+| OpenAI (api.openai.com) | **NO** | sin emulador oficial | **SI — siempre** |
 | Azure AD (auth JWT) | parcial | deshabilitado en dev | **SI en producción** |
 
-> Para dev necesitás credenciales reales de Azure AI Search y Azure OpenAI.
+> Para dev necesitás credenciales reales de Azure AI Search y OpenAI (api.openai.com).
 > Blob Storage corre completamente local con Azurite.
+>
+> **Nota:** Este proyecto usa OpenAI directo (`api.openai.com`) en lugar de Azure OpenAI.
+> Azure OpenAI requiere suscripción de pago con aprobación manual de Microsoft.
 
 ---
 
@@ -23,9 +26,9 @@
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - Docker (para Azurite)
-- Una cuenta Azure con:
-  - Azure AI Search creado (tier Free sirve para dev)
-  - Azure OpenAI con deployment de `text-embedding-3-large` y `gpt-4o`
+- Una cuenta en:
+  - [OpenAI Platform](https://platform.openai.com) — API Key (`sk-...`)
+  - Azure con Azure AI Search creado (tier Free sirve para dev)
 
 ---
 
@@ -49,7 +52,7 @@ UseDevelopmentStorage=true
 
 ---
 
-### Paso 2 — Configurar credenciales reales con user-secrets
+### Paso 2 — Configurar credenciales con user-secrets
 
 `dotnet user-secrets` guarda las credenciales **fuera del repositorio**, en tu sistema local.
 Es el equivalente a un archivo `.env` que nunca se commitea.
@@ -64,12 +67,11 @@ El ID `semantic-search-api-dev` viene del campo `<UserSecretsId>` en el `.csproj
 
 **Cargar los secrets** (correlos desde `src/SemanticSearch.Api/`):
 
-```bash
+```powershell
 cd src/SemanticSearch.Api
 
-# Azure OpenAI — credenciales reales obligatorias
-dotnet user-secrets set "AzureOpenAI:ApiKey"   "tu-api-key-de-azure-openai"
-dotnet user-secrets set "AzureOpenAI:Endpoint" "https://tu-resource.openai.azure.com/"
+# OpenAI — API Key de api.openai.com
+dotnet user-secrets set "OpenAI:ApiKey" "sk-..."
 
 # Azure AI Search — credenciales reales obligatorias
 dotnet user-secrets set "AzureSearch:ApiKey"   "tu-api-key-de-azure-search"
@@ -80,9 +82,9 @@ dotnet user-secrets set "AzureBlob:ConnectionString" "UseDevelopmentStorage=true
 ```
 
 Verificar que se guardaron:
-```bash
+```powershell
 dotnet user-secrets list
-# AzureOpenAI:ApiKey = tu-api-key-de-azure-openai
+# OpenAI:ApiKey = sk-...
 # AzureSearch:ApiKey = tu-api-key-de-azure-search
 # AzureBlob:ConnectionString = UseDevelopmentStorage=true
 ```
@@ -95,52 +97,41 @@ Todos los comandos se corren desde `src/SemanticSearch.Api/` donde está el `.cs
 con el `<UserSecretsId>`.
 
 **Guardar / actualizar un secret:**
-```bash
+```powershell
 dotnet user-secrets set "Seccion:Clave" "valor"
 
 # Ejemplos reales de este proyecto:
-dotnet user-secrets set "AzureOpenAI:ApiKey"            "sk-..."
-dotnet user-secrets set "AzureOpenAI:Endpoint"          "https://mi-resource.openai.azure.com/"
-dotnet user-secrets set "AzureOpenAI:EmbeddingDeployment" "text-embedding-3-large"
-dotnet user-secrets set "AzureOpenAI:ChatDeployment"    "gpt-4o"
-dotnet user-secrets set "AzureSearch:ApiKey"            "abc123..."
-dotnet user-secrets set "AzureSearch:Endpoint"          "https://mi-search.search.windows.net"
-dotnet user-secrets set "AzureSearch:IndexName"         "documents"
-dotnet user-secrets set "AzureBlob:ConnectionString"    "UseDevelopmentStorage=true"
-dotnet user-secrets set "AzureBlob:Container"           "docs"
+dotnet user-secrets set "OpenAI:ApiKey"              "sk-..."
+dotnet user-secrets set "OpenAI:EmbeddingDeployment" "text-embedding-3-large"
+dotnet user-secrets set "OpenAI:ChatDeployment"      "gpt-4o"
+dotnet user-secrets set "AzureSearch:ApiKey"         "abc123..."
+dotnet user-secrets set "AzureSearch:Endpoint"       "https://mi-search.search.windows.net"
+dotnet user-secrets set "AzureSearch:IndexName"      "documents"
+dotnet user-secrets set "AzureBlob:ConnectionString" "UseDevelopmentStorage=true"
+dotnet user-secrets set "AzureBlob:Container"        "docs"
 ```
 
 **Listar todos los secrets activos:**
-```bash
+```powershell
 dotnet user-secrets list
 ```
 
 **Eliminar un secret específico:**
-```bash
-dotnet user-secrets remove "AzureOpenAI:ApiKey"
+```powershell
+dotnet user-secrets remove "OpenAI:ApiKey"
 ```
 
 **Eliminar TODOS los secrets del proyecto:**
-```bash
+```powershell
 dotnet user-secrets clear
 ```
 
-**Ver el archivo secrets.json directamente** (es un JSON plano):
-```bash
-# Linux / Mac
-cat ~/.microsoft/usersecrets/semantic-search-api-dev/secrets.json
-
-# Windows
-type %APPDATA%\Microsoft\UserSecrets\semantic-search-api-dev\secrets.json
-```
-
-El archivo tiene esta forma — es el mismo formato que `appsettings.json`:
+El archivo secrets.json tiene esta forma:
 ```json
 {
-  "AzureOpenAI:ApiKey": "tu-key-real",
-  "AzureOpenAI:Endpoint": "https://mi-resource.openai.azure.com/",
+  "OpenAI:ApiKey": "sk-...",
   "AzureSearch:ApiKey": "tu-key-real",
-  "AzureSearch:Endpoint": "https://mi-search.search.windows.net",
+  "AzureSearch:Endpoint": "https://mi-resource.search.windows.net",
   "AzureBlob:ConnectionString": "UseDevelopmentStorage=true"
 }
 ```
@@ -152,7 +143,7 @@ El archivo tiene esta forma — es el mismo formato que `appsettings.json`:
 
 ### Paso 3 — Correr la API
 
-```bash
+```powershell
 cd src/SemanticSearch.Api
 dotnet run
 ```
@@ -167,19 +158,9 @@ Documentación interactiva (Scalar): `http://localhost:5000/scalar/v1`
 .NET apila las fuentes de config en este orden (cada capa sobreescribe la anterior):
 
 ```
-1. appsettings.json            ← base, valores por defecto
+1. appsettings.json             ← base, valores por defecto
 2. appsettings.Development.json ← overrides para dev (placeholder values)
-3. user-secrets                ← credenciales reales, fuera del repo ← gana
-```
-
-Por eso `appsettings.Development.json` tiene valores `"placeholder"` — los user-secrets
-los sobreescriben en tiempo de ejecución. Nunca hay credenciales reales en el repositorio.
-
-**Analogía Python:**
-```
-.env.example     → appsettings.json
-.env.development → appsettings.Development.json
-.env             → user-secrets  (ignorado en .gitignore)
+3. user-secrets                 ← credenciales reales, fuera del repo ← gana
 ```
 
 ---
@@ -192,10 +173,10 @@ tu máquina
 │   └── Azurite (puerto 10000) ← Blob Storage real, sin credenciales
 ├── dotnet run (puerto 5000)
 │   ├── lee appsettings.Development.json
-│   └── lee ~/.microsoft/usersecrets/semantic-search-api-dev/secrets.json
-└── Azure (cloud)
+│   └── lee %APPDATA%\Microsoft\UserSecrets\...\secrets.json
+└── Servicios externos (cloud)
     ├── Azure AI Search  ← credencial real en user-secrets
-    └── Azure OpenAI     ← credencial real en user-secrets
+    └── OpenAI           ← credencial real en user-secrets (sk-...)
 ```
 
 ---
@@ -204,7 +185,7 @@ tu máquina
 
 ### Prerequisitos
 
-- Azure CLI (`az`) instalado y autenticado
+- Azure CLI (`az`) instalado y autenticado (`az login`)
 - Docker
 - Acceso al Azure Container Registry (ACR)
 
@@ -212,21 +193,24 @@ tu máquina
 
 ### Paso 1 — Provisionar infraestructura con Bicep
 
-```bash
-az deployment group create \
-  --resource-group rg-semantic-search \
-  --template-file infra/main.bicep \
-  --parameters @infra/params.json
+```powershell
+az deployment group create `
+  --resource-group rg-semantic-search-dev `
+  --template-file infra/main.bicep `
+  --parameters @infra/params.json `
+  --parameters openAiApiKey="sk-..." searchApiKey="TU_SEARCH_KEY"
 ```
+
+Los secrets (`openAiApiKey`, `searchApiKey`) se pasan directo en el comando — **nunca en `params.json`**.
 
 ---
 
 ### Paso 2 — Build y push de la imagen
 
-```bash
-az acr build \
-  --registry <nombre-acr> \
-  --image semantic-search-api:latest \
+```powershell
+az acr build `
+  --registry TU_ACR_NAME `
+  --image semantic-search-api:latest `
   ./src/SemanticSearch.Api
 ```
 
@@ -234,11 +218,11 @@ az acr build \
 
 ### Paso 3 — Deploy en Azure Container Apps
 
-```bash
-az containerapp update \
-  --name semantic-search-api \
-  --resource-group rg-semantic-search \
-  --image <nombre-acr>.azurecr.io/semantic-search-api:latest
+```powershell
+az containerapp update `
+  --name semantic-search-dev-api `
+  --resource-group rg-semantic-search-dev `
+  --image TU_ACR_NAME.azurecr.io/semantic-search-api:latest
 ```
 
 En producción las credenciales van en **Azure Key Vault** referenciadas desde Container Apps
@@ -256,21 +240,3 @@ En producción las credenciales van en **Azure Key Vault** referenciadas desde C
 | Credenciales | `user-secrets` (local) | Azure Key Vault |
 | `ValidateOnStart` | activo | activo |
 | Logging | Debug | Information/Warning |
-
----
-
-### Agregar un nuevo secret
-
-Si en el futuro necesitás agregar una nueva credencial:
-
-**1. Definirla en la clase Options correspondiente** (`src/SemanticSearch.Core/Options/`)
-
-**2. Agregarla a `appsettings.Development.json`** con valor `"placeholder"`
-
-**3. Cargarla en user-secrets:**
-```bash
-cd src/SemanticSearch.Api
-dotnet user-secrets set "Seccion:NuevaClave" "valor-real"
-```
-
-**4. En producción**, agregarla como secret en Key Vault y referenciarla en el Container App.
