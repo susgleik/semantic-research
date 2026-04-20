@@ -1,6 +1,5 @@
-using Azure;
-using Azure.AI.OpenAI;
 using FluentAssertions;
+using OpenAI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -24,16 +23,13 @@ public class RagServiceTests
     {
         var opts = Options.Create(new OpenAIOptions
         {
-            Endpoint            = "https://fake.openai.azure.com/",
             ApiKey              = "fake-key",
             EmbeddingDeployment = "text-embedding-3-large",
             ChatDeployment      = "gpt-4o"
         });
 
         // No llegamos a usar el cliente de OpenAI en estos tests (los mocks cortan antes).
-        var fakeClient = new AzureOpenAIClient(
-            new Uri("https://fake.openai.azure.com/"),
-            new AzureKeyCredential("fake-key"));
+        var fakeClient = new OpenAIClient("fake-key");
 
         return new RagService(
             _embeddings.Object,

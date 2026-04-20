@@ -34,10 +34,9 @@ public class ApiWebApplicationFactory : WebApplicationFactory<Program>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["AzureOpenAI:Endpoint"]            = "https://fake.openai.azure.com/",
-                ["AzureOpenAI:ApiKey"]              = "fake-openai-key",
-                ["AzureOpenAI:EmbeddingDeployment"] = "text-embedding-3-large",
-                ["AzureOpenAI:ChatDeployment"]      = "gpt-4o",
+                ["OpenAI:ApiKey"]              = "fake-openai-key",
+                ["OpenAI:EmbeddingDeployment"] = "text-embedding-3-large",
+                ["OpenAI:ChatDeployment"]      = "gpt-4o",
                 ["AzureSearch:Endpoint"]            = "https://fake.search.windows.net",
                 ["AzureSearch:ApiKey"]              = "fake-search-key",
                 ["AzureSearch:IndexName"]           = "documents",
