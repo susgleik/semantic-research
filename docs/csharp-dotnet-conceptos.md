@@ -25,7 +25,7 @@ El `.csproj` es la declaración del proyecto. La primera línea dice todo:
 |---|---|---|
 | `Microsoft.NET.Sdk.Web` | ASP.NET Core (API / web) | FastAPI / Flask |
 | `Microsoft.NET.Sdk` | Librería o consola pura | módulo Python |
-| `Microsoft.NET.Sdk` + `AzureFunctionsVersion` | Azure Functions | AWS Lambda |
+| `Microsoft.NET.Sdk` + `Amazon.Lambda.*` | AWS Lambda (.NET) | función serverless, sin framework web |
 
 ```xml
 <!-- Esto es ASP.NET Core -->
@@ -87,7 +87,7 @@ using SemanticSearch.Core.Models; // y luego usás DocumentChunk directamente
 ## 5. Estructura interna de un proyecto ASP.NET Core
 
 ```
-SemanticSearch.Api/
+SemanticSearch.Api/        (versión anterior, sobre Azure — ver docs/blueprint-csharp.md)
 │
 ├── Endpoints/       ← rutas HTTP            (= routers de FastAPI)
 ├── Services/        ← lógica de negocio     (= services / use_cases)
@@ -98,6 +98,12 @@ SemanticSearch.Api/
 ├── appsettings.json ← configuración         (= config.py / .env)
 └── *.csproj         ← declaración proyecto  (= pyproject.toml)
 ```
+
+> **Nota — proyectos Lambda (versión actual del proyecto):** las funciones
+> `SemanticSearch.Functions.*` no usan ASP.NET Core ni su contenedor de DI.
+> No hay `Program.cs` con `builder.Services`; el `FunctionHandler` arma sus
+> dependencias a mano en el constructor de la clase (ver sección 7). Las carpetas
+> `Services/` y `Models/` siguen aplicando igual.
 
 ---
 
@@ -166,6 +172,29 @@ app.MapPost("/query", async (IRagService ragService) => {
 | `AddSingleton` | Una sola instancia para toda la app | módulo cargado una vez |
 | `AddScoped` | Una instancia por request HTTP | instancia por request |
 | `AddTransient` | Nueva instancia cada vez que se pide | `new X()` siempre |
+
+> **En las Lambdas de este proyecto no hay contenedor de DI.** El constructor
+> de la clase del handler arma sus dependencias a mano (efectivamente todo es
+> "singleton" porque el runtime de Lambda reutiliza la misma instancia entre
+> invocaciones mientras el contenedor esté caliente):
+>
+> ```csharp
+> public class QueryFunction
+> {
+>     private readonly SimilaritySearchService _search;
+>     private readonly RagAnswerService _answer;
+>
+>     public QueryFunction()
+>     {
+>         _search = new SimilaritySearchService(new AmazonDynamoDBClient());
+>         _answer = new RagAnswerService(new AmazonBedrockRuntimeClient());
+>     }
+> }
+> ```
+>
+> En tests se sigue pudiendo mockear porque las clases dependen de interfaces
+> (`IAmazonDynamoDB`, `IAmazonBedrockRuntime`) — solo cambia quién arma el grafo
+> de dependencias: en ASP.NET Core lo arma el framework, en Lambda lo armás vos.
 
 ---
 
@@ -344,4 +373,4 @@ C# 12 extendió esa misma idea a las `class` normales. Es la misma sintaxis.
 
 ---
 
-_Stack de este proyecto: ASP.NET Core 10 · Azure Functions v4 · Azure AI Search · Azure OpenAI · .NET 10_
+_Stack de este proyecto: .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock · S3_

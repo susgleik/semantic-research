@@ -1,21 +1,24 @@
 # TODO — Proyecto F: Sistema de Búsqueda Semántica RAG
-## C# / .NET 10 · ASP.NET Core · Azure Functions v4 · Azure AI Search · Azure OpenAI
+## C# / .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock · S3 · React (Vite)
+
+> Migrado de Azure a **AWS Free Tier** (cuenta nueva, 2026). Arquitectura serverless +
+> microservicios: cada función Lambda tiene una sola responsabilidad, desplegada e
+> independiente. Ver [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md) para el
+> diagrama completo y el razonamiento detrás de cada decisión de servicio.
 
 ---
 
-## Fase 0 — Setup del proyecto
+## Fase 0 — Setup de cuenta AWS y del proyecto
 
-- [x] Crear estructura de carpetas del solution
-- [x] Crear `SemanticSearch.sln`
-- [x] Crear `SemanticSearch.Core.csproj` (shared library)
-- [x] Crear `SemanticSearch.Api.csproj` (ASP.NET Core 8)
-- [x] Crear `SemanticSearch.Functions.csproj` (Azure Functions v4)
-- [x] Crear `SemanticSearch.McpServer.csproj` (MCP Server)
-- [x] Crear proyectos de tests `.csproj`
-- [X] Inicializar repositorio git
-- [X] Configurar `.gitignore` para .NET
-- [X] Configurar `dotnet user-secrets` para credenciales locales
-- [X] Restaurar paquetes NuGet (`dotnet restore`)
+- [ ] Crear cuenta AWS (si no existe) y activar MFA en el usuario root
+- [ ] Crear un **AWS Budget Alert** a $5-10 USD (Bedrock no tiene free tier)
+- [ ] Crear usuario IAM con permisos de despliegue (no usar root para trabajar)
+- [ ] Instalar y configurar AWS CLI (`aws configure`)
+- [ ] Instalar AWS SAM CLI (`sam --version`)
+- [ ] Decidir y documentar la región (ej. `us-east-1`, donde Bedrock tiene más modelos disponibles)
+- [ ] Solicitar acceso a los modelos de Bedrock necesarios (Titan Embed Text v2, Claude Haiku) — requiere aprobación manual en la consola
+- [ ] Actualizar `.gitignore` para artefactos de AWS SAM/CDK (`.aws-sam/`, `cdk.out/`)
+- [ ] Eliminar/archivar `infra/*.bicep` (quedan como referencia histórica de la versión Azure)
 
 ---
 
@@ -23,134 +26,145 @@
 
 - [x] `Models/DocumentChunk.cs` — modelo de chunk con texto, índice y wordcount
 - [x] `Models/IndexedDocument.cs` — documento indexado con metadata
-- [x] `Options/OpenAIOptions.cs` — configuración Azure OpenAI (endpoint, key, deployments)
-- [x] `Options/SearchOptions.cs` — configuración Azure AI Search
-- [x] `Options/BlobOptions.cs` — configuración Azure Blob Storage
+- [ ] Reemplazar `Options/OpenAIOptions.cs` → `Options/BedrockOptions.cs` (región, modelId de embeddings, modelId de chat)
+- [ ] Reemplazar `Options/SearchOptions.cs` → `Options/DynamoDbOptions.cs` (nombre de tabla, región)
+- [ ] Reemplazar `Options/BlobOptions.cs` → `Options/S3Options.cs` (bucket name, región)
+- [ ] `Models/ChunkRecord.cs` — modelo del item de DynamoDB (PK/SK, embedding como `List<float>`, texto, metadata del doc)
 
 ---
 
-## Fase 2 — SemanticSearch.Api
+## Fase 2 — `upload-service` (Lambda)
 
-### 2a — Configuración base
-- [x] `Program.cs` — Minimal API entrypoint con DI, options, middleware y auth
-- [x] `appsettings.json` — configuración de Azure services
-- [x] `appsettings.Development.json` — overrides para desarrollo local
-- [x] `Dockerfile` — multi-stage build para Container Apps
-
-### 2b — Modelos de request/response
-- [x] `Models/QueryRequest.cs`
-- [x] `Models/QueryResponse.cs`
-- [x] `Models/UploadRequest.cs`
-- [x] `Models/UploadResponse.cs`
-- [x] `Models/SourceChunk.cs`
-- [x] `Models/DocumentRecord.cs`
-
-### 2c — Servicios
-- [x] `Services/IEmbeddingService.cs` + `EmbeddingService.cs` — Azure OpenAI embeddings
-- [x] `Services/ISearchService.cs` + `SearchService.cs` — hybrid search Azure AI Search
-- [x] `Services/IBlobService.cs` + `BlobService.cs` — upload a Blob Storage
-- [x] `Services/IRagService.cs` + `RagService.cs` — orquestador principal RAG
-
-### 2d — Endpoints (Minimal API)
-- [x] `Endpoints/UploadEndpoints.cs` — `POST /upload`
-- [x] `Endpoints/QueryEndpoints.cs` — `POST /query`
-- [x] `Endpoints/DocumentEndpoints.cs` — `GET /documents`, `POST /reindex/{docId}`
-- [x] `Endpoints/HealthEndpoints.cs` — `GET /health`
-
-### 2e — Middleware
-- [x] `Middleware/ExceptionMiddleware.cs` — manejo centralizado de errores
-- [ ] `Middleware/AuthMiddleware.cs` — validación Azure AD JWT (ya cubierto por `Microsoft.Identity.Web`)
-
-### 2f — Validaciones y mejoras
-- [x] Agregar validación de tamaño máximo de archivo en `/upload`
-- [x] Agregar soporte de paginación en `GET /documents`
-- [x] Agregar rate limiting con .NET 10 built-in (`PartitionedRateLimiter`, 100 req/min por IP)
+- [ ] Crear proyecto `src/SemanticSearch.Functions.Upload` (`Amazon.Lambda.Core` + `Amazon.Lambda.APIGatewayEvents`)
+- [ ] Handler `UploadFunction.cs` — recibe `POST /upload` desde API Gateway (HTTP API), valida tamaño/tipo de archivo
+- [ ] `Services/IS3UploadService.cs` + `S3UploadService.cs` — sube el archivo al bucket `docs`
+- [ ] Modelos `UploadRequest.cs` / `UploadResponse.cs` (reusar de `SemanticSearch.Core` si aplica)
+- [ ] Validar tamaño máximo de archivo (igual que la versión actual del endpoint `/upload`)
 
 ---
 
-## Fase 3 — SemanticSearch.Functions (Azure Functions v4)
+## Fase 3 — `indexer-service` (Lambda, trigger por evento S3)
 
-- [x] `Program.cs` — isolated worker host setup con DI
-- [x] `host.json` — configuración del host de Azure Functions
-- [x] `local.settings.json` — variables de entorno locales (no commitear)
-- [x] `Functions/DocumentIndexer.cs` — blob trigger → chunk → embed → index
-- [x] `Services/ChunkerService.cs` — sliding window con overlap
-- [x] `Services/EmbeddingService.cs` — batch embeddings con Azure OpenAI
-- [x] `Services/SearchIndexerService.cs` — escribe chunks indexados en Azure AI Search
+- [ ] Crear proyecto `src/SemanticSearch.Functions.Indexer`
+- [ ] Handler `IndexerFunction.cs` — disparado por **S3 Event Notification** (`s3:ObjectCreated:*` sobre el bucket `docs`)
+- [ ] `Services/ChunkerService.cs` — reusar sliding window con overlap de la versión actual
 - [ ] Agregar soporte para `.pdf` con **PdfPig**
 - [ ] Agregar soporte para `.docx` con **DocumentFormat.OpenXml**
-- [ ] Manejar errores de indexación con dead-letter queue o poison blob
+- [ ] `Services/IBedrockEmbeddingService.cs` + `BedrockEmbeddingService.cs` — embeddings batch con Titan Embed Text v2
+- [ ] `Services/IDynamoChunkWriter.cs` + `DynamoChunkWriter.cs` — escribe `ChunkRecord` en DynamoDB
+- [ ] Manejar errores de indexación: mover el objeto a un prefijo `failed/` en S3 (equivalente a poison blob) en vez de DLQ gestionada (mantiene todo dentro de Always Free)
 
 ---
 
-## Fase 4 — SemanticSearch.McpServer
+## Fase 4 — Pipeline de consulta RAG (Lambdas)
+
+- [ ] Crear proyecto `src/SemanticSearch.Functions.Query`
+- [ ] Handler `QueryFunction.cs` — recibe `POST /query`, orquesta embed → search → answer
+- [ ] `Services/IBedrockEmbeddingService.cs` — reusar lógica de embeddings (compartir vía `SemanticSearch.Core` o paquete interno)
+- [ ] `Services/ISimilaritySearchService.cs` + `SimilaritySearchService.cs` — lee chunks candidatos de DynamoDB y calcula similitud coseno en memoria, retorna top-K
+- [ ] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Bedrock (Claude Haiku) para generar la respuesta con fuentes citadas
+- [ ] Modelos `QueryRequest.cs` / `QueryResponse.cs` / `SourceChunk.cs` (reusar de `SemanticSearch.Core`)
+
+---
+
+## Fase 5 — `documents-service` (Lambda)
+
+- [ ] Crear proyecto `src/SemanticSearch.Functions.Documents`
+- [ ] Handler `DocumentsFunction.cs` — `GET /documents` (con paginación), `POST /reindex/{docId}`, `DELETE /documents/{docId}`
+- [ ] `Services/IDocumentRegistryService.cs` + `DocumentRegistryService.cs` — lee/escribe metadata de documentos en DynamoDB
+- [ ] `GET /health` — healthcheck simple (puede vivir en la misma función o en una función propia, ultraligera)
+
+---
+
+## Fase 6 — Auth (Amazon Cognito)
+
+- [ ] Crear User Pool de Cognito + App Client
+- [ ] Configurar **JWT Authorizer** nativo de API Gateway HTTP API contra el User Pool (sin código de validación manual)
+- [ ] Excluir `/health` del authorizer
+- [ ] Documentar flujo de login (Cognito Hosted UI o SDK) para el frontend
+
+---
+
+## Fase 7 — Frontend (React SPA)
+
+- [ ] Scaffold `frontend/` con Vite + React + TypeScript
+- [ ] Cliente HTTP (`src/api/client.ts`) apuntando a la URL de API Gateway
+- [ ] Vista: subir documento (drag & drop) → `upload-service`
+- [ ] Vista: lista de documentos + estado de indexado → `documents-service`
+- [ ] Vista: buscador/chat de preguntas → `query-service`, mostrando respuesta + fuentes citadas
+- [ ] Vista/acción: botón reindexar documento
+- [ ] Integración de login con Cognito (Hosted UI o `amazon-cognito-identity-js`)
+- [ ] Variables de entorno (`.env`) para URL de API y datos de Cognito (no commitear)
+- [ ] Build de producción (`npm run build`) y deploy a S3 (bucket `frontend`) + invalidación de CloudFront
+
+---
+
+## Fase 8 — SemanticSearch.McpServer
 
 - [x] `Program.cs` — host del servidor MCP
 - [x] `Tools/SearchDocumentsTool.cs` — herramienta `search_documents`
 - [x] `Tools/ListDocumentsTool.cs` — herramienta `list_documents`
 - [x] `Tools/ReindexDocumentTool.cs` — herramienta `reindex_document`
+- [ ] Apuntar las tools a la nueva URL de API Gateway (en vez de Container Apps)
 - [ ] Configurar `.vscode/settings.json` con `github.copilot.chat.mcpServers`
 - [ ] Probar integración con Copilot Chat (`@doc-search`)
 
 ---
 
-## Fase 5 — Tests
+## Fase 9 — Tests
 
-### API Tests (`SemanticSearch.Api.Tests`)
-- [x] `Endpoints/QueryEndpointsTests.cs` — test del flujo RAG completo (mock servicios)
-- [x] `Endpoints/UploadEndpointsTests.cs` — test de upload con validaciones
-- [x] `Services/RagServiceTests.cs` — unit test del orquestador RAG
-- [x] `ApiWebApplicationFactory.cs` — factory compartida con PassThroughAuthHandler y mocks
-
-### Functions Tests (`SemanticSearch.Functions.Tests`)
+### Functions Tests
 - [x] `DocumentIndexerTests.cs` — tests de ChunkerService (sliding window, overlap, edge cases)
 - [x] Test de `ChunkerService` — 6 casos: ventana exacta, ventana+1, overlap, StartIndex, texto vacío
+- [ ] Migrar tests de `SemanticSearch.Api.Tests` a tests por función Lambda (mockear `IAmazonS3`, `IAmazonDynamoDB`, cliente Bedrock)
+- [ ] Tests de `SimilaritySearchService` — ranking correcto por similitud coseno
+- [ ] Tests de integración local con `dotnet lambda-test-tool` o invocación directa del handler
 
 ---
 
-## Fase 6 — Infraestructura (Bicep)
+## Fase 10 — Infraestructura como código (AWS SAM)
 
-- [ ] `infra/main.bicep` — orquestador principal que llama a los módulos
-- [ ] `infra/blob.bicep` — Azure Blob Storage con container `docs`
-- [ ] `infra/search.bicep` — Azure AI Search con índice vectorial y semántico
-- [ ] `infra/openai.bicep` — Azure OpenAI con deployments de embedding y chat
-- [ ] `infra/container-app.bicep` — Container App con autoscaling y secrets de Key Vault
-- [ ] `infra/params.json` — parámetros de deploy (sin secrets)
-- [ ] Crear índice de AI Search con campo `embedding` vectorial (dims=3072 para `text-embedding-3-large`)
-
----
-
-## Fase 7 — CI/CD (GitHub Actions)
-
-- [ ] `.github/workflows/deploy-api.yml` — build, test, push imagen y deploy Container App
-- [ ] `.github/workflows/deploy-functions.yml` — build y publish Azure Function
-- [ ] Configurar secrets en GitHub: `AZURE_CREDENTIALS`, `ACR_NAME`, `RESOURCE_GROUP`
-- [ ] Configurar environments en GitHub Actions (staging / production)
+- [ ] `infra/template.yaml` — template SAM con todos los recursos (Lambdas, API Gateway, S3, DynamoDB, Cognito)
+- [ ] Definir tabla DynamoDB: PK `documentId`, SK `chunkId`, GSI si se necesita listar por fecha
+- [ ] Definir bucket S3 `docs` con notificación de evento hacia `indexer-service`
+- [ ] Definir bucket S3 `frontend` con static website hosting + distribución CloudFront
+- [ ] Definir API Gateway HTTP API con rutas hacia cada Lambda + JWT Authorizer de Cognito
+- [ ] `infra/samconfig.toml` — configuración de deploy por entorno (dev/prod)
+- [ ] Permisos IAM mínimos por función (cada Lambda solo accede a lo que necesita — least privilege)
 
 ---
 
-## Fase 8 — Deploy y configuración en Azure
+## Fase 11 — CI/CD (GitHub Actions)
 
-- [ ] Crear Resource Group en Azure
-- [ ] Provisionar infra con `az deployment group create`
-- [ ] Configurar Azure AD App Registration para auth JWT
-- [ ] Build y push de imagen al Azure Container Registry
-- [ ] Crear Container App con variables de entorno y secrets de Key Vault
-- [ ] Publicar Azure Function con `func azure functionapp publish`
+- [ ] `.github/workflows/deploy.yml` — build, test, `sam build` + `sam deploy`
+- [ ] `.github/workflows/deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront
+- [ ] Configurar **OIDC** entre GitHub Actions y AWS (rol IAM asumible, sin access keys estáticas en secrets)
+- [ ] Configurar environments en GitHub Actions (dev / prod)
+
+---
+
+## Fase 12 — Deploy y configuración en AWS
+
+- [ ] `sam build && sam deploy --guided` (primer deploy)
 - [ ] Verificar conectividad con `GET /health`
-- [ ] Configurar monitoreo con Application Insights
+- [ ] Probar pipeline de ingesta completo (subir doc → ver chunks en DynamoDB)
+- [ ] Probar pipeline de query completo (pregunta → respuesta con fuentes)
+- [ ] Deploy del frontend a S3 + CloudFront, verificar la app en el dominio de CloudFront
+- [ ] Configurar monitoreo básico con CloudWatch (logs + alarma de errores)
+- [ ] Confirmar que el AWS Budget Alert está activo
 
 ---
 
 ## Checklist de seguridad
 
-- [ ] Nunca commitear credenciales ni connection strings
-- [ ] Usar `dotnet user-secrets` en desarrollo
-- [ ] Usar Key Vault references en producción
-- [ ] Validar tokens JWT con Azure AD en todos los endpoints (excepto `/health`)
-- [ ] Configurar CORS correctamente en Container App
-- [ ] Revisar permisos mínimos en Managed Identity
+- [ ] Nunca commitear credenciales, access keys ni connection strings
+- [ ] Usar `dotnet user-secrets` en desarrollo local
+- [ ] Usar **Secrets Manager** o **SSM Parameter Store** en producción (no variables de entorno en texto plano para secretos)
+- [ ] Validar JWT de Cognito en todos los endpoints excepto `/health`
+- [ ] Configurar CORS correctamente en API Gateway (solo el origen de CloudFront)
+- [ ] Permisos IAM mínimos por Lambda (least privilege, sin `*` en resources)
+- [ ] Bucket S3 `docs` y `frontend` sin acceso público directo (S3 privado + CloudFront con OAC para el frontend)
 
 ---
 
-_Stack: ASP.NET Core 10 · Azure Functions v4 · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps · Bicep · GitHub Actions_
+_Stack: .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock · S3 · Cognito · CloudWatch · AWS SAM · GitHub Actions (OIDC) · React (Vite) + TypeScript_

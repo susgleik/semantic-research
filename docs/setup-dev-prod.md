@@ -1,5 +1,5 @@
 # Setup — Development y Production
-## SemanticSearch RAG · .NET 10 / ASP.NET Core
+## SemanticSearch RAG · .NET 8 / AWS Lambda
 
 ---
 
@@ -7,16 +7,18 @@
 
 | Servicio | Emulable local | Herramienta | Necesita credenciales reales |
 |---|---|---|---|
-| Azure Blob Storage | SI | **Azurite** (Docker) | No en dev |
-| Azure AI Search | **NO** | sin emulador oficial | **SI — siempre** |
-| OpenAI (api.openai.com) | **NO** | sin emulador oficial | **SI — siempre** |
-| Azure AD (auth JWT) | parcial | deshabilitado en dev | **SI en producción** |
+| S3 | SI | **LocalStack** (Docker, free/community) | No en dev |
+| DynamoDB | SI | **DynamoDB Local** (Docker) o LocalStack | No en dev |
+| Amazon Bedrock (embeddings + LLM) | **NO** | sin emulador oficial | **SI — siempre** |
+| Amazon Cognito (auth JWT) | parcial | deshabilitado en dev | **SI en producción** |
 
-> Para dev necesitás credenciales reales de Azure AI Search y OpenAI (api.openai.com).
-> Blob Storage corre completamente local con Azurite.
+> Para dev necesitás credenciales reales solo para Bedrock (no se puede evitar:
+> no existe emulador de modelos de IA). S3 y DynamoDB corren completamente
+> local con Docker, sin tocar la cuenta de AWS real ni gastar free tier.
 >
-> **Nota:** Este proyecto usa OpenAI directo (`api.openai.com`) en lugar de Azure OpenAI.
-> Azure OpenAI requiere suscripción de pago con aprobación manual de Microsoft.
+> **Nota:** Bedrock requiere que el modelo (Titan Embed Text v2, Claude Haiku) esté
+> habilitado en la consola de AWS antes del primer uso — es un paso manual de
+> aprobación, no automático.
 
 ---
 
@@ -24,116 +26,107 @@
 
 ### Prerrequisitos
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- Docker (para Azurite)
-- Una cuenta en:
-  - [OpenAI Platform](https://platform.openai.com) — API Key (`sk-...`)
-  - Azure con Azure AI Search creado (tier Free sirve para dev)
+- [.NET 8 SDK](https://dotnet.microsoft.com/download)
+- Docker (para LocalStack / DynamoDB Local)
+- AWS CLI instalado y configurado (`aws configure`)
+- Una cuenta AWS con:
+  - Acceso a Bedrock habilitado para los modelos `amazon.titan-embed-text-v2:0` y
+    `anthropic.claude-3-haiku-20240307-v1:0` (consola → Bedrock → Model access)
+  - Un usuario IAM con permisos de `bedrock:InvokeModel` (no usar el usuario root)
 
 ---
 
-### Paso 1 — Levantar Azurite (Blob Storage local)
+### Paso 1 — Levantar LocalStack (S3 + DynamoDB locales)
 
 ```bash
 # Desde la root del repo
-docker compose up -d azurite
+docker compose up -d localstack
 ```
 
 Verificar que está corriendo:
 ```bash
 docker compose ps
-# azurite   Up   0.0.0.0:10000->10000/tcp
+# localstack   Up   0.0.0.0:4566->4566/tcp
 ```
 
-La connection string para Azurite es siempre esta (no cambia, es el valor por defecto del emulador):
+Crear el bucket y la tabla localmente (una sola vez):
+```bash
+aws --endpoint-url=http://localhost:4566 s3 mb s3://semantic-search-docs-dev
+
+aws --endpoint-url=http://localhost:4566 dynamodb create-table \
+  --table-name semantic-search-chunks \
+  --attribute-definitions AttributeName=documentId,AttributeType=S AttributeName=chunkId,AttributeType=S \
+  --key-schema AttributeName=documentId,KeyType=HASH AttributeName=chunkId,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
 ```
-UseDevelopmentStorage=true
-```
+
+El endpoint de LocalStack es siempre `http://localhost:4566` — las credenciales
+pueden ser cualquier valor dummy (`test`/`test`), LocalStack no las valida.
 
 ---
 
 ### Paso 2 — Configurar credenciales con user-secrets
 
-`dotnet user-secrets` guarda las credenciales **fuera del repositorio**, en tu sistema local.
-Es el equivalente a un archivo `.env` que nunca se commitea.
+`dotnet user-secrets` guarda las credenciales **fuera del repositorio**, en tu
+sistema local. Es el equivalente a un archivo `.env` que nunca se commitea.
 
 **Dónde se guardan físicamente:**
 ```
-Linux/Mac:  ~/.microsoft/usersecrets/semantic-search-api-dev/secrets.json
-Windows:    %APPDATA%\Microsoft\UserSecrets\semantic-search-api-dev\secrets.json
+Linux/Mac:  ~/.microsoft/usersecrets/semantic-search-functions-dev/secrets.json
+Windows:    %APPDATA%\Microsoft\UserSecrets\semantic-search-functions-dev\secrets.json
 ```
 
-El ID `semantic-search-api-dev` viene del campo `<UserSecretsId>` en el `.csproj`.
-
-**Cargar los secrets** (correlos desde `src/SemanticSearch.Api/`):
+**Cargar los secrets** (correlos desde el proyecto Lambda que corresponda, ej.
+`src/SemanticSearch.Functions.Query/`):
 
 ```powershell
-cd src/SemanticSearch.Api
+cd src/SemanticSearch.Functions.Query
 
-# OpenAI — API Key de api.openai.com
-dotnet user-secrets set "OpenAI:ApiKey" "sk-..."
+# Bedrock — credenciales reales obligatorias (no hay emulador)
+dotnet user-secrets set "Bedrock:Region" "us-east-1"
+dotnet user-secrets set "Bedrock:EmbeddingModelId" "amazon.titan-embed-text-v2:0"
+dotnet user-secrets set "Bedrock:ChatModelId" "anthropic.claude-3-haiku-20240307-v1:0"
 
-# Azure AI Search — credenciales reales obligatorias
-dotnet user-secrets set "AzureSearch:ApiKey"   "tu-api-key-de-azure-search"
-dotnet user-secrets set "AzureSearch:Endpoint" "https://tu-resource.search.windows.net"
+# DynamoDB — apuntar a LocalStack en dev
+dotnet user-secrets set "DynamoDb:ServiceUrl" "http://localhost:4566"
+dotnet user-secrets set "DynamoDb:ChunksTableName" "semantic-search-chunks"
 
-# Blob Storage — usar Azurite local (no necesita credenciales reales)
-dotnet user-secrets set "AzureBlob:ConnectionString" "UseDevelopmentStorage=true"
+# S3 — apuntar a LocalStack en dev
+dotnet user-secrets set "S3:ServiceUrl" "http://localhost:4566"
+dotnet user-secrets set "S3:DocsBucket" "semantic-search-docs-dev"
 ```
 
 Verificar que se guardaron:
 ```powershell
 dotnet user-secrets list
-# OpenAI:ApiKey = sk-...
-# AzureSearch:ApiKey = tu-api-key-de-azure-search
-# AzureBlob:ConnectionString = UseDevelopmentStorage=true
 ```
+
+> Las credenciales de AWS para Bedrock se resuelven con el **AWS credential
+> provider chain** estándar (`aws configure`, variables de entorno, o un
+> profile con `AWS_PROFILE`) — no van en `user-secrets`, eso es solo para
+> configuración de la app (endpoints, nombres de tabla/bucket, model IDs).
 
 ---
 
 ### Referencia completa de comandos user-secrets
 
-Todos los comandos se corren desde `src/SemanticSearch.Api/` donde está el `.csproj`
-con el `<UserSecretsId>`.
-
-**Guardar / actualizar un secret:**
 ```powershell
-dotnet user-secrets set "Seccion:Clave" "valor"
+dotnet user-secrets set "Bedrock:Region"            "us-east-1"
+dotnet user-secrets set "Bedrock:EmbeddingModelId"  "amazon.titan-embed-text-v2:0"
+dotnet user-secrets set "Bedrock:ChatModelId"       "anthropic.claude-3-haiku-20240307-v1:0"
+dotnet user-secrets set "DynamoDb:ServiceUrl"       "http://localhost:4566"
+dotnet user-secrets set "DynamoDb:ChunksTableName"  "semantic-search-chunks"
+dotnet user-secrets set "S3:ServiceUrl"             "http://localhost:4566"
+dotnet user-secrets set "S3:DocsBucket"             "semantic-search-docs-dev"
 
-# Ejemplos reales de este proyecto:
-dotnet user-secrets set "OpenAI:ApiKey"              "sk-..."
-dotnet user-secrets set "OpenAI:EmbeddingDeployment" "text-embedding-3-large"
-dotnet user-secrets set "OpenAI:ChatDeployment"      "gpt-4o"
-dotnet user-secrets set "AzureSearch:ApiKey"         "abc123..."
-dotnet user-secrets set "AzureSearch:Endpoint"       "https://mi-search.search.windows.net"
-dotnet user-secrets set "AzureSearch:IndexName"      "documents"
-dotnet user-secrets set "AzureBlob:ConnectionString" "UseDevelopmentStorage=true"
-dotnet user-secrets set "AzureBlob:Container"        "docs"
-```
-
-**Listar todos los secrets activos:**
-```powershell
+# Listar
 dotnet user-secrets list
-```
 
-**Eliminar un secret específico:**
-```powershell
-dotnet user-secrets remove "OpenAI:ApiKey"
-```
+# Eliminar un secret específico
+dotnet user-secrets remove "Bedrock:Region"
 
-**Eliminar TODOS los secrets del proyecto:**
-```powershell
+# Eliminar TODOS los secrets del proyecto
 dotnet user-secrets clear
-```
-
-El archivo secrets.json tiene esta forma:
-```json
-{
-  "OpenAI:ApiKey": "sk-...",
-  "AzureSearch:ApiKey": "tu-key-real",
-  "AzureSearch:Endpoint": "https://mi-resource.search.windows.net",
-  "AzureBlob:ConnectionString": "UseDevelopmentStorage=true"
-}
 ```
 
 > Este archivo vive **fuera del repo** y nunca se commitea.
@@ -141,27 +134,23 @@ El archivo secrets.json tiene esta forma:
 
 ---
 
-### Paso 3 — Correr la API
+### Paso 3 — Invocar las Lambdas localmente
+
+Con AWS SAM CLI se puede invocar cada función localmente sin desplegar:
 
 ```powershell
-cd src/SemanticSearch.Api
-dotnet run
+sam build
+
+# Invocar el Lambda de query con un evento de prueba
+sam local invoke QueryFunction --event events/query-event.json
+
+# O levantar el API Gateway completo localmente
+sam local start-api
+# disponible en http://localhost:3000
 ```
 
-La API arranca en `http://localhost:5000`.
-Documentación interactiva (Scalar): `http://localhost:5000/scalar/v1`
-
----
-
-### Cómo .NET carga la config en Development
-
-.NET apila las fuentes de config en este orden (cada capa sobreescribe la anterior):
-
-```
-1. appsettings.json             ← base, valores por defecto
-2. appsettings.Development.json ← overrides para dev (placeholder values)
-3. user-secrets                 ← credenciales reales, fuera del repo ← gana
-```
+`sam local start-api` simula el API Gateway HTTP API completo, incluyendo el
+ruteo hacia cada Lambda — es el equivalente local más cercano a producción.
 
 ---
 
@@ -170,13 +159,11 @@ Documentación interactiva (Scalar): `http://localhost:5000/scalar/v1`
 ```
 tu máquina
 ├── Docker
-│   └── Azurite (puerto 10000) ← Blob Storage real, sin credenciales
-├── dotnet run (puerto 5000)
-│   ├── lee appsettings.Development.json
-│   └── lee %APPDATA%\Microsoft\UserSecrets\...\secrets.json
-└── Servicios externos (cloud)
-    ├── Azure AI Search  ← credencial real en user-secrets
-    └── OpenAI           ← credencial real en user-secrets (sk-...)
+│   └── LocalStack (puerto 4566) ← S3 + DynamoDB locales, sin credenciales reales
+├── sam local start-api (puerto 3000)
+│   └── lee user-secrets de cada proyecto Lambda
+└── Servicios externos (cloud, reales)
+    └── Amazon Bedrock ← credencial real vía AWS credential chain (no hay emulador)
 ```
 
 ---
@@ -185,48 +172,58 @@ tu máquina
 
 ### Prerequisitos
 
-- Azure CLI (`az`) instalado y autenticado (`az login`)
-- Docker
-- Acceso al Azure Container Registry (ACR)
+- AWS CLI configurado con un usuario/rol con permisos de deploy
+- AWS SAM CLI instalado (`sam --version`)
+- Acceso a Bedrock habilitado en la región de deploy
 
 ---
 
-### Paso 1 — Provisionar infraestructura con Bicep
+### Paso 1 — Build y deploy con AWS SAM
 
 ```powershell
-az deployment group create `
-  --resource-group rg-semantic-search-dev `
-  --template-file infra/main.bicep `
-  --parameters @infra/params.json `
-  --parameters openAiApiKey="sk-..." searchApiKey="TU_SEARCH_KEY"
+sam build
+
+# Primer deploy: modo guiado, genera samconfig.toml
+sam deploy --guided
+
+# Deploys siguientes
+sam deploy
 ```
 
-Los secrets (`openAiApiKey`, `searchApiKey`) se pasan directo en el comando — **nunca en `params.json`**.
+`sam deploy` se encarga de empaquetar cada Lambda, crear/actualizar el stack de
+CloudFormation con todos los recursos (S3, DynamoDB, API Gateway, Cognito) y
+publicar el código — no hay un paso separado de "build de imagen + push a
+registry" como en Container Apps.
 
 ---
 
-### Paso 2 — Build y push de la imagen
+### Paso 2 — Deploy del frontend
 
 ```powershell
-az acr build `
-  --registry TU_ACR_NAME `
-  --image semantic-search-api:latest `
-  ./src/SemanticSearch.Api
+cd frontend
+npm run build
+
+aws s3 sync dist/ s3://semantic-search-frontend-<account-id> --delete
+
+aws cloudfront create-invalidation \
+  --distribution-id <DISTRIBUTION_ID> \
+  --paths "/*"
 ```
 
 ---
 
-### Paso 3 — Deploy en Azure Container Apps
+### Paso 3 — Verificar el deploy
 
 ```powershell
-az containerapp update `
-  --name semantic-search-dev-api `
-  --resource-group rg-semantic-search-dev `
-  --image TU_ACR_NAME.azurecr.io/semantic-search-api:latest
+# URL del API Gateway queda en los Outputs del stack
+aws cloudformation describe-stacks --stack-name semantic-search --query "Stacks[0].Outputs"
+
+curl https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com/health
 ```
 
-En producción las credenciales van en **Azure Key Vault** referenciadas desde Container Apps
-— nunca como variables de entorno en texto plano.
+En producción las credenciales/secretos van en **AWS Secrets Manager** o
+**SSM Parameter Store**, referenciados desde la configuración de cada Lambda
+(variables de entorno que apuntan al ARN del secret) — nunca como texto plano.
 
 ---
 
@@ -234,9 +231,10 @@ En producción las credenciales van en **Azure Key Vault** referenciadas desde C
 
 | | Development | Production |
 |---|---|---|
-| Auth Azure AD | deshabilitada | activa (JWT obligatorio) |
-| Scalar / Swagger UI | activo en `/scalar/v1` | deshabilitado |
-| Blob Storage | Azurite local | Azure Blob real |
-| Credenciales | `user-secrets` (local) | Azure Key Vault |
-| `ValidateOnStart` | activo | activo |
-| Logging | Debug | Information/Warning |
+| Auth Cognito | deshabilitada (o User Pool de pruebas) | activa (JWT Authorizer obligatorio en API Gateway) |
+| S3 / DynamoDB | LocalStack (Docker, local) | recursos reales de AWS |
+| Bedrock | real (no hay emulador) | real |
+| Credenciales | `user-secrets` + AWS credential chain local | Secrets Manager / SSM Parameter Store |
+| Invocación | `sam local start-api` | API Gateway + Lambda desplegados |
+| Logging | Debug, consola local | CloudWatch Logs (Information/Warning) |
+| Frontend | `npm run dev` (Vite dev server) | build estático en S3 + CloudFront |
