@@ -134,7 +134,32 @@
 
 ---
 
-## Fase 11 — CI/CD (GitHub Actions)
+## Fase 11 — `report-service` (Lambda)
+
+El usuario elige un escenario de análisis y el sistema genera un informe basado
+en el corpus completo de documentos indexados — diferente al chat RAG donde se
+hace una pregunta puntual. El informe se guarda en S3 y queda disponible para
+descarga.
+
+- [ ] Crear proyecto `src/SemanticSearch.Functions.Reports`
+- [ ] Handler `ReportFunction.cs` — `POST /reports` (recibe escenario + parámetros) y `GET /reports/{reportId}` (descarga el informe generado)
+- [ ] `Models/ReportRequest.cs` — escenario elegido + parámetros opcionales (rango de fechas, categoría de documentos, instrucción personalizada)
+- [ ] `Models/ReportResponse.cs` — `reportId`, `status` (`generating` / `ready`), `downloadUrl`
+- [ ] `Services/IReportGeneratorService.cs` + `ReportGeneratorService.cs` — lee chunks de DynamoDB por filtro, construye el prompt con todo el contexto y llama a Bedrock (Claude) para generar el informe
+- [ ] `Services/IReportStorageService.cs` + `ReportStorageService.cs` — guarda el informe generado (texto o PDF) en S3 bucket `reports` y genera una URL prefirmada de descarga
+- [ ] Escenarios predefinidos (plantillas de prompt):
+  - `summary` — resumen ejecutivo del corpus completo
+  - `risks` — detección de riesgos o inconsistencias entre documentos
+  - `compare` — comparativa entre dos documentos específicos (recibe dos `documentId`)
+  - `extract` — extracción de datos clave (fechas, nombres, cláusulas)
+  - `custom` — el usuario escribe libremente qué quiere analizar
+- [ ] Vista en el frontend: selector de escenario + parámetros → botón "Generar informe" → estado `generando...` → botón de descarga cuando esté listo
+- [ ] Agregar bucket S3 `reports` en `infra/template.yaml` con política de expiración de objetos (ej. 7 días) para no acumular archivos
+- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `bedrock:InvokeModel`
+
+---
+
+## Fase 13 — CI/CD (GitHub Actions)
 
 - [ ] `.github/workflows/deploy.yml` — build, test, `sam build` + `sam deploy`
 - [ ] `.github/workflows/deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront
@@ -143,7 +168,7 @@
 
 ---
 
-## Fase 12 — Deploy y configuración en AWS
+## Fase 14 — Deploy y configuración en AWS
 
 - [ ] `sam build && sam deploy --guided` (primer deploy)
 - [ ] Verificar conectividad con `GET /health`
