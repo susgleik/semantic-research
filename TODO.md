@@ -19,6 +19,9 @@
 - [ ] Solicitar acceso a los modelos de Bedrock necesarios (Titan Embed Text v2, Claude Haiku) — requiere aprobación manual en la consola
 - [ ] Actualizar `.gitignore` para artefactos de AWS SAM/CDK (`.aws-sam/`, `cdk.out/`)
 - [ ] Eliminar/archivar `infra/*.bicep` (quedan como referencia histórica de la versión Azure)
+- [ ] Migrar IaC de AWS SAM a **Terraform** — reemplaza `infra/template.yaml` por módulos `main.tf` / `variables.tf` / `outputs.tf`
+- [ ] Instalar Terraform CLI y configurar el provider `hashicorp/aws`
+- [ ] Configurar backend remoto S3 + tabla DynamoDB para locking del estado de Terraform (`terraform { backend "s3" { ... } }`)
 
 ---
 
@@ -122,15 +125,22 @@
 
 ---
 
-## Fase 10 — Infraestructura como código (AWS SAM)
+## Fase 10 — Infraestructura como código (Terraform)
 
-- [ ] `infra/template.yaml` — template SAM con todos los recursos (Lambdas, API Gateway, S3, DynamoDB, Cognito)
+> IaC migrado de AWS SAM y Bicep (Azure) a **Terraform**. Reemplaza `infra/template.yaml` y los archivos `*.bicep`.
+
+- [ ] `infra/main.tf` — recursos principales: Lambdas, API Gateway HTTP API, S3 (docs/frontend/reports), DynamoDB, Cognito User Pool
+- [ ] `infra/variables.tf` — variables de entorno y región (`aws_region`, nombres de bucket, tabla DynamoDB, etc.)
+- [ ] `infra/outputs.tf` — outputs del despliegue (URL de API Gateway, nombre de distribución CloudFront, ARNs)
+- [ ] `infra/backend.tf` — backend remoto S3 + locking con DynamoDB para el estado de Terraform
 - [ ] Definir tabla DynamoDB: PK `documentId`, SK `chunkId`, GSI si se necesita listar por fecha
-- [ ] Definir bucket S3 `docs` con notificación de evento hacia `indexer-service`
-- [ ] Definir bucket S3 `frontend` con static website hosting + distribución CloudFront
+- [ ] Definir bucket S3 `docs` con notificación de evento (`aws_s3_bucket_notification`) hacia `indexer-service`
+- [ ] Definir bucket S3 `frontend` + distribución CloudFront con OAC (`aws_cloudfront_distribution`)
+- [ ] Definir bucket S3 `reports` con política de expiración de objetos (7 días)
 - [ ] Definir API Gateway HTTP API con rutas hacia cada Lambda + JWT Authorizer de Cognito
-- [ ] `infra/samconfig.toml` — configuración de deploy por entorno (dev/prod)
+- [ ] `infra/terraform.tfvars.example` — plantilla de variables (nunca commitear el `.tfvars` real)
 - [ ] Permisos IAM mínimos por función (cada Lambda solo accede a lo que necesita — least privilege)
+- [ ] Reemplazar `sam build && sam deploy` por `terraform init && terraform plan && terraform apply` en los workflows de CI/CD
 
 ---
 

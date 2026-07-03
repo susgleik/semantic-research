@@ -5,9 +5,10 @@ los chunkea + embedea + indexa, y permite hacer preguntas en lenguaje natural qu
 responden citando las fuentes exactas de los documentos.
 
 **Proyecto académico (Proyecto F)** — requisito explícito: aplicar cómputo en la nube
-con **serverless y/o microservicios**. Ver [`TODO.md`](TODO.md) para el plan de fases
-y [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md) para el diagrama de
-arquitectura completo.
+con **serverless y/o microservicios**. Ver [`TODO.md`](TODO.md) para el plan de fases,
+[`docs/architecture.md`](docs/architecture.md) para el diagrama y decisiones de
+arquitectura completos, y [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md)
+para el código de referencia de cada servicio.
 
 ## Stack
 
@@ -22,6 +23,55 @@ arquitectura completo.
 - **Frontend:** React (Vite + TypeScript), servido como SPA estática desde S3 + CloudFront
 - **IaC:** AWS SAM (`infra/template.yaml`)
 - **CI/CD:** GitHub Actions con OIDC hacia AWS (sin access keys estáticas)
+
+## Arquitectura
+
+```mermaid
+graph TD
+    Browser["Browser / React SPA"]
+    MCP["MCP Server\nCopilot Chat"]
+
+    CF["CloudFront + OAC"]
+    S3FE["S3 — frontend"]
+    Cognito["Amazon Cognito\nJWT Authorizer"]
+    APIGW["API Gateway\nHTTP API"]
+
+    Upload["Lambda: upload-service\nPOST /upload"]
+    Indexer["Lambda: indexer-service\ntrigger S3"]
+    Query["Lambda: query-service\nPOST /query"]
+    Documents["Lambda: documents-service\nGET /documents"]
+    Reports["Lambda: report-service\nPOST /reports"]
+
+    S3Docs["S3 — docs"]
+    S3Rep["S3 — reports"]
+    Dynamo["DynamoDB\nchunks + embeddings"]
+    Bedrock["Amazon Bedrock\nTitan Embed v2 + Claude Haiku"]
+
+    Browser -->|HTTPS| CF
+    CF --> S3FE
+    Browser --> APIGW
+    MCP --> APIGW
+    Cognito -.->|valida JWT| APIGW
+
+    APIGW --> Upload
+    APIGW --> Query
+    APIGW --> Documents
+    APIGW --> Reports
+
+    Upload --> S3Docs
+    S3Docs -->|S3 Event| Indexer
+    Indexer -->|embed| Bedrock
+    Indexer -->|write chunks| Dynamo
+
+    Query -->|read chunks| Dynamo
+    Query -->|embed + answer| Bedrock
+
+    Documents --> Dynamo
+
+    Reports -->|read corpus| Dynamo
+    Reports -->|generate| Bedrock
+    Reports --> S3Rep
+```
 
 ## Por qué esta arquitectura (decisiones no obvias)
 
