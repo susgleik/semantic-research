@@ -18,7 +18,9 @@ para el código de referencia de cada servicio.
 - **Storage de documentos:** S3
 - **Vector store:** DynamoDB + similitud coseno calculada en memoria dentro del Lambda
   (no hay vector DB gestionada gratis en AWS — ver razonamiento abajo)
-- **Embeddings + LLM:** Amazon Bedrock (Titan Embed Text v2 + Claude Haiku)
+- **Embeddings + LLM:** Google Gemini API (`gemini-embedding-001` / `text-embedding-004`
+  para embeddings + `gemini-2.0-flash` o `2.5-flash` para respuestas y reportes),
+  llamada por HTTP directo desde cada Lambda — no AWS Bedrock (ver razonamiento abajo)
 - **Auth:** Amazon Cognito (JWT Authorizer nativo de API Gateway)
 - **Frontend:** React (Vite + TypeScript), servido como SPA estática desde S3 + CloudFront
 - **IaC:** AWS SAM (`infra/template.yaml`)
@@ -45,7 +47,7 @@ graph TD
     S3Docs["S3 — docs"]
     S3Rep["S3 — reports"]
     Dynamo["DynamoDB\nchunks + embeddings"]
-    Bedrock["Amazon Bedrock\nTitan Embed v2 + Claude Haiku"]
+    Gemini["Google Gemini API\ngemini-embedding-001 + gemini-2.0-flash"]
 
     Browser -->|HTTPS| CF
     CF --> S3FE
@@ -60,37 +62,59 @@ graph TD
 
     Upload --> S3Docs
     S3Docs -->|S3 Event| Indexer
-    Indexer -->|embed| Bedrock
+    Indexer -->|embed HTTPS| Gemini
     Indexer -->|write chunks| Dynamo
 
     Query -->|read chunks| Dynamo
-    Query -->|embed + answer| Bedrock
+    Query -->|embed + answer HTTPS| Gemini
 
     Documents --> Dynamo
 
     Reports -->|read corpus| Dynamo
-    Reports -->|generate| Bedrock
+    Reports -->|generate HTTPS| Gemini
     Reports --> S3Rep
 ```
 
 ## Por qué esta arquitectura (decisiones no obvias)
 
-- **Migrado de Azure a AWS** porque el requisito de la materia exige AWS. La cuenta es
-  **nueva (2026)**, por lo que el free tier clásico de "12 meses gratis" **no aplica**:
-  en su lugar hay $100-200 de crédito por 6 meses + un set de servicios **Always Free**
-  permanentes (Lambda, DynamoDB, Cognito, CloudWatch, Step Functions, CloudFront).
-  El diseño se apoya deliberadamente en los servicios Always Free para que el costo de
-  infraestructura sea $0 incluso después de agotar el crédito inicial.
+- **Migrado de Azure a AWS** porque el requisito de la materia exige AWS. **El crédito
+  promocional inicial ya se agotó** — la cuenta ya no tiene margen de $0 garantizado.
+  Ahora solo cuentan como gratis los servicios **Always Free** permanentes (Lambda,
+  DynamoDB, Cognito, CloudWatch hasta 5GB de ingesta, CloudFront hasta 1TB/10M
+  requests, Step Functions), que siguen siendo $0 sin importar la antigüedad de la
+  cuenta. **API Gateway y S3 ya no son gratis** — se facturan desde el primer request/byte
+  (S3 ~$0.023/GB/mes + costo por request; API Gateway HTTP API ~$1 por millón de
+  requests). A la escala de un proyecto académico esto sigue siendo centavos, pero ya
+  no es "$0 automático": cada decisión de diseño que reduzca requests/Scans/tokens
+  ahora se traduce directo en factura real, no solo en riesgo futuro.
 - **DynamoDB en vez de un vector store gestionado:** OpenSearch (Service o Serverless)
   no tiene free tier real y puede costar $700+/mes si no se administra con cuidado.
-  RDS+pgvector tiene free tier pero solo 12 meses y rompe el modelo serverless (instancia
-  siempre prendida). Por eso: chunks + embeddings en DynamoDB (Always Free, 25GB), y la
-  búsqueda de similitud se hace en código dentro del Lambda. Funciona bien para un corpus
-  de documentos de tamaño académico; no es la elección correcta para producción a gran
-  escala.
-- **Bedrock es el único costo real** — no tiene free tier, es pay-per-token. El volumen
-  de pruebas de un proyecto de clase cuesta centavos. Hay un AWS Budget Alert configurado
-  para evitar gastos accidentales.
+  RDS+pgvector tiene free tier pero solo 12 meses (ya no aplica) y rompe el modelo
+  serverless (instancia siempre prendida). Por eso: chunks + embeddings en DynamoDB
+  (Always Free hasta 25GB / 25 RCU-WCU, permanente), y la búsqueda de similitud se hace
+  en código dentro del Lambda. Ojo: un `Scan` completo en cada query/reporte consume
+  RCU reales una vez superado ese umbral — conviene cachear el índice de embeddings
+  (S3 o memoria del Lambda) en vez de golpear DynamoDB en cada request.
+- **Google Gemini API en vez de Amazon Bedrock para embeddings + LLM** — Bedrock no
+  tiene ningún free tier (pay-per-token desde la primera llamada). Se compraron $25 USD
+  de créditos de la API de Gemini (**tier de pago**, no la API key gratuita de AI
+  Studio) — esto da además la garantía contractual de Google de que el contenido no se
+  usa para entrenar sus modelos, algo que la app necesita al tratarse de una base de
+  conocimiento privada de documentos de empresa. A los precios de `gemini-2.0-flash`
+  (~$0.10/1M tokens entrada, ~$0.40/1M salida) y de los modelos de embedding, $25 cubre
+  holgadamente el volumen de un proyecto académico.
+  - Los Lambdas llaman la API de Gemini por HTTPS directo (sin SDK de AWS) — deben
+    **permanecer fuera de una VPC** para tener salida a internet gratis; meterlos en
+    VPC exigiría un NAT Gateway (~$32/mes fijos), lo que anularía el ahorro.
+  - La API key de Gemini se guarda en SSM Parameter Store (SecureString), igual que
+    cualquier otro secreto del proyecto.
+  - Embeddings: `gemini-embedding-001` (truncado vía MRL a 768 dims) o
+    `text-embedding-004` (768 dims fijas) — con `task_type=RETRIEVAL_DOCUMENT` al
+    indexar chunks y `task_type=RETRIEVAL_QUERY` al embeddear la pregunta del usuario.
+  - Sigue conviniendo cachear embeddings/respuestas repetidas y usar map-reduce en
+    `report-service` en vez de meter el corpus completo en un solo prompt — reduce el
+    consumo de créditos aunque ya no dependa del free tier de Bedrock. Hay un AWS
+    Budget Alert configurado para el resto de la infraestructura (S3, API Gateway).
 - **Lambdas separados por responsabilidad (no un solo Lambda con ASP.NET Core)** — es
   la forma de cumplir el requisito de "microservicios" de la materia: cada función escala,
   se despliega y se factura de forma independiente.

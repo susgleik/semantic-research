@@ -1,9 +1,13 @@
 # TODO — Proyecto F: Sistema de Búsqueda Semántica RAG
-## C# / .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock · S3 · React (Vite)
+## C# / .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Google Gemini API · S3 · React (Vite)
 
-> Migrado de Azure a **AWS Free Tier** (cuenta nueva, 2026). Arquitectura serverless +
-> microservicios: cada función Lambda tiene una sola responsabilidad, desplegada e
-> independiente. Ver [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md) para el
+> Migrado de Azure a AWS. Arquitectura serverless + microservicios: cada función Lambda
+> tiene una sola responsabilidad, desplegada e independiente. **El crédito promocional
+> inicial ya se agotó** — solo el tier Always Free (Lambda, DynamoDB, Cognito,
+> CloudFront, CloudWatch) sigue siendo $0 permanente; S3 y API Gateway ya se facturan
+> desde el primer uso, y Bedrock siempre fue pay-per-token. Ver
+> [`docs/architecture.md`](docs/architecture.md#cuenta-aws-y-costos) para el detalle
+> por servicio y [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md) para el
 > diagrama completo y el razonamiento detrás de cada decisión de servicio.
 
 ---
@@ -11,12 +15,18 @@
 ## Fase 0 — Setup de cuenta AWS y del proyecto
 
 - [ ] Crear cuenta AWS (si no existe) y activar MFA en el usuario root
-- [ ] Crear un **AWS Budget Alert** a $5-10 USD (Bedrock no tiene free tier)
+- [ ] Crear/revisar el **AWS Budget Alert** (sin crédito de respaldo ya activo, poner
+      el umbral bajo — ej. $5 USD — ya que S3 y API Gateway se facturan desde el primer
+      uso). Monitorear por separado el consumo de créditos de Gemini en Google AI
+      Studio / Cloud Console (no aparece en el Budget Alert de AWS)
 - [ ] Crear usuario IAM con permisos de despliegue (no usar root para trabajar)
 - [ ] Instalar y configurar AWS CLI (`aws configure`)
 - [ ] Instalar AWS SAM CLI (`sam --version`)
-- [ ] Decidir y documentar la región (ej. `us-east-1`, donde Bedrock tiene más modelos disponibles)
-- [ ] Solicitar acceso a los modelos de Bedrock necesarios (Titan Embed Text v2, Claude Haiku) — requiere aprobación manual en la consola
+- [ ] Decidir y documentar la región (ej. `us-east-1`)
+- [ ] Generar API key de Google Gemini en **tier de pago** (Google AI Studio / Cloud
+      Console) contra los $25 USD de créditos comprados — no usar la API key gratuita
+      por las garantías de no-entrenamiento del tier de pago
+- [ ] Guardar la API key de Gemini en SSM Parameter Store (SecureString)
 - [ ] Actualizar `.gitignore` para artefactos de AWS SAM/CDK (`.aws-sam/`, `cdk.out/`)
 - [ ] Eliminar/archivar `infra/*.bicep` (quedan como referencia histórica de la versión Azure)
 - [ ] Migrar IaC de AWS SAM a **Terraform** — reemplaza `infra/template.yaml` por módulos `main.tf` / `variables.tf` / `outputs.tf`
@@ -29,20 +39,31 @@
 
 - [x] `Models/DocumentChunk.cs` — modelo de chunk con texto, índice y wordcount
 - [x] `Models/IndexedDocument.cs` — documento indexado con metadata
-- [ ] Reemplazar `Options/OpenAIOptions.cs` → `Options/BedrockOptions.cs` (región, modelId de embeddings, modelId de chat)
-- [ ] Reemplazar `Options/SearchOptions.cs` → `Options/DynamoDbOptions.cs` (nombre de tabla, región)
-- [ ] Reemplazar `Options/BlobOptions.cs` → `Options/S3Options.cs` (bucket name, región)
-- [ ] `Models/ChunkRecord.cs` — modelo del item de DynamoDB (PK/SK, embedding como `List<float>`, texto, metadata del doc)
+- [x] Reemplazar `Options/OpenAIOptions.cs` → `Options/GeminiOptions.cs` (API key, modelId de embeddings, modelId de chat, dimensión del vector)
+- [x] Reemplazar `Options/SearchOptions.cs` → `Options/DynamoDbOptions.cs` (nombre de tabla, región, `ServiceUrl` opcional para DynamoDB Local/LocalStack)
+- [x] Reemplazar `Options/BlobOptions.cs` → `Options/S3Options.cs` (bucket name, región, `ServiceUrl` opcional para LocalStack)
+- [x] `Models/ChunkRecord.cs` — modelo del item de DynamoDB (PK `DocumentId`/SK `ChunkId`, embedding como `List<float>`, texto, metadata del doc)
+- [x] `.csproj` corregido a `net8.0` (estaba en `net10.0`, no soportado nativamente por Lambda) + paquete `AWSSDK.DynamoDBv2`
 
 ---
 
 ## Fase 2 — `upload-service` (Lambda)
 
-- [ ] Crear proyecto `src/SemanticSearch.Functions.Upload` (`Amazon.Lambda.Core` + `Amazon.Lambda.APIGatewayEvents`)
-- [ ] Handler `UploadFunction.cs` — recibe `POST /upload` desde API Gateway (HTTP API), valida tamaño/tipo de archivo
-- [ ] `Services/IS3UploadService.cs` + `S3UploadService.cs` — sube el archivo al bucket `docs`
-- [ ] Modelos `UploadRequest.cs` / `UploadResponse.cs` (reusar de `SemanticSearch.Core` si aplica)
-- [ ] Validar tamaño máximo de archivo (igual que la versión actual del endpoint `/upload`)
+> **Decisión de diseño:** `POST /upload` ya **no** recibe el archivo directo. API
+> Gateway HTTP API + Lambda tienen un límite de payload síncrono de ~6MB, y un PDF de
+> 10MB en base64 pesa ~13MB — lo supera. En su lugar, el Lambda solo recibe metadata
+> (`filename`, `category`, `contentType`) y devuelve una **URL prefirmada de S3** para
+> que el cliente suba el archivo directo a S3 (sin límite práctico de tamaño, sin
+> ocupar tiempo de Lambda transfiriendo bytes). La validación de tamaño máximo se
+> mueve a `indexer-service` (Fase 3), que sí ve el objeto ya subido en S3.
+
+- [x] Crear proyecto `src/SemanticSearch.Functions.Upload` (`Amazon.Lambda.Core` + `Amazon.Lambda.APIGatewayEvents` + `AWSSDK.S3`)
+- [x] Handler `UploadFunction.cs` — recibe `POST /upload` (JSON con metadata), valida `filename`/`category`/extensión permitida, genera `docId` y devuelve `{ docId, filename, status: "pending", uploadUrl }`
+- [x] `Services/IS3UploadService.cs` + `S3UploadService.cs` — genera la URL prefirmada de S3 (`GetPreSignedURLAsync`, PUT, TTL 15 min), con soporte de `S3Options.ServiceUrl` para LocalStack (Fase 12)
+- [x] Modelos `UploadRequest.cs` / `UploadResponse.cs` en `SemanticSearch.Core.Models` (reusados)
+- [x] Validación de extensión permitida (`.pdf`, `.docx` — las que soporta `indexer-service` hasta ahora); la validación de **tamaño máximo** del archivo queda pendiente para `indexer-service` (Fase 3), ya que el Lambda de upload no ve los bytes
+- [x] Tests (`tests/SemanticSearch.Functions.Upload.Tests`) — 8 casos: request válido, filename/category faltante, extensión no soportada, JSON inválido
+- [x] Se sacaron del `.sln` los proyectos legacy de Azure (`SemanticSearch.Api`, `SemanticSearch.Functions` y sus tests) — dejaron de compilar tras la Fase 1 al perder `OpenAIOptions`/`SearchOptions`/`BlobOptions`; el código queda en disco como referencia histórica, pero fuera del build activo
 
 ---
 
@@ -53,9 +74,10 @@
 - [ ] `Services/ChunkerService.cs` — reusar sliding window con overlap de la versión actual
 - [ ] Agregar soporte para `.pdf` con **PdfPig**
 - [ ] Agregar soporte para `.docx` con **DocumentFormat.OpenXml**
-- [ ] `Services/IBedrockEmbeddingService.cs` + `BedrockEmbeddingService.cs` — embeddings batch con Titan Embed Text v2
+- [ ] `Services/IGeminiEmbeddingService.cs` + `GeminiEmbeddingService.cs` — embeddings batch (`batchEmbedContents`, `task_type=RETRIEVAL_DOCUMENT`) contra la API de Gemini vía HttpClient
 - [ ] `Services/IDynamoChunkWriter.cs` + `DynamoChunkWriter.cs` — escribe `ChunkRecord` en DynamoDB
 - [ ] Manejar errores de indexación: mover el objeto a un prefijo `failed/` en S3 (equivalente a poison blob) en vez de DLQ gestionada (mantiene todo dentro de Always Free)
+- [ ] Confirmar que la función **no** está asociada a una VPC (necesita salida a internet gratis hacia la API de Gemini; una VPC exigiría NAT Gateway de pago)
 
 ---
 
@@ -63,10 +85,11 @@
 
 - [ ] Crear proyecto `src/SemanticSearch.Functions.Query`
 - [ ] Handler `QueryFunction.cs` — recibe `POST /query`, orquesta embed → search → answer
-- [ ] `Services/IBedrockEmbeddingService.cs` — reusar lógica de embeddings (compartir vía `SemanticSearch.Core` o paquete interno)
+- [ ] `Services/IGeminiEmbeddingService.cs` — reusar lógica de embeddings (compartir vía `SemanticSearch.Core` o paquete interno), embeddear la pregunta con `task_type=RETRIEVAL_QUERY`
 - [ ] `Services/ISimilaritySearchService.cs` + `SimilaritySearchService.cs` — lee chunks candidatos de DynamoDB y calcula similitud coseno en memoria, retorna top-K
-- [ ] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Bedrock (Claude Haiku) para generar la respuesta con fuentes citadas
+- [ ] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Gemini (`gemini-2.0-flash`) para generar la respuesta con fuentes citadas
 - [ ] Modelos `QueryRequest.cs` / `QueryResponse.cs` / `SourceChunk.cs` (reusar de `SemanticSearch.Core`)
+- [ ] Cachear (TTL corto en DynamoDB) preguntas repetidas para evitar re-embeddear y re-generar con Gemini en cada request
 
 ---
 
@@ -119,7 +142,7 @@
 ### Functions Tests
 - [x] `DocumentIndexerTests.cs` — tests de ChunkerService (sliding window, overlap, edge cases)
 - [x] Test de `ChunkerService` — 6 casos: ventana exacta, ventana+1, overlap, StartIndex, texto vacío
-- [ ] Migrar tests de `SemanticSearch.Api.Tests` a tests por función Lambda (mockear `IAmazonS3`, `IAmazonDynamoDB`, cliente Bedrock)
+- [ ] Migrar tests de `SemanticSearch.Api.Tests` a tests por función Lambda (mockear `IAmazonS3`, `IAmazonDynamoDB`, `HttpClient`/`IGeminiEmbeddingService` de Gemini)
 - [ ] Tests de `SimilaritySearchService` — ranking correcto por similitud coseno
 - [ ] Tests de integración local con `dotnet lambda-test-tool` o invocación directa del handler
 
@@ -155,7 +178,7 @@ descarga.
 - [ ] Handler `ReportFunction.cs` — `POST /reports` (recibe escenario + parámetros) y `GET /reports/{reportId}` (descarga el informe generado)
 - [ ] `Models/ReportRequest.cs` — escenario elegido + parámetros opcionales (rango de fechas, categoría de documentos, instrucción personalizada)
 - [ ] `Models/ReportResponse.cs` — `reportId`, `status` (`generating` / `ready`), `downloadUrl`
-- [ ] `Services/IReportGeneratorService.cs` + `ReportGeneratorService.cs` — lee chunks de DynamoDB por filtro, construye el prompt con todo el contexto y llama a Bedrock (Claude) para generar el informe
+- [ ] `Services/IReportGeneratorService.cs` + `ReportGeneratorService.cs` — lee chunks de DynamoDB por filtro y llama a Gemini (`gemini-2.0-flash`) para generar el informe; usar map-reduce (resumir por documento y luego combinar) en vez de meter el corpus completo en un solo prompt, para controlar el consumo de créditos
 - [ ] `Services/IReportStorageService.cs` + `ReportStorageService.cs` — guarda el informe generado (texto o PDF) en S3 bucket `reports` y genera una URL prefirmada de descarga
 - [ ] Escenarios predefinidos (plantillas de prompt):
   - `summary` — resumen ejecutivo del corpus completo
@@ -165,7 +188,37 @@ descarga.
   - `custom` — el usuario escribe libremente qué quiere analizar
 - [ ] Vista en el frontend: selector de escenario + parámetros → botón "Generar informe" → estado `generando...` → botón de descarga cuando esté listo
 - [ ] Agregar bucket S3 `reports` en `infra/template.yaml` con política de expiración de objetos (ej. 7 días) para no acumular archivos
-- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `bedrock:InvokeModel`
+- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `ssm:GetParameter` sobre el parámetro de la API key de Gemini (no requiere permisos de Bedrock)
+
+---
+
+## Fase 12 — Entorno local con Docker Compose (sin AWS)
+
+> Réplica local de la topología de microservicios + red interna mientras se espera
+> la aprobación para tocar la cuenta de AWS. Usa el **mismo código de Lambda** que se
+> despliega después (sin reescribir a ASP.NET Core) y llama a la **API real de Gemini**
+> (la IA no se mockea). Diferencias conocidas vs. producción quedan documentadas en
+> `docs/architecture.md`.
+
+- [ ] `docker-compose.yml` raíz con una red Docker dedicada (`bridge`) que simula la
+      segmentación de red interna entre servicios
+- [ ] Contenedor **LocalStack** (Community, gratis) para S3 (`docs`, `reports`, `frontend`) — mismo `IAmazonS3`, solo cambia el endpoint a `localhost`
+- [ ] Contenedor **DynamoDB Local** (imagen oficial `amazon/dynamodb-local`) o LocalStack — mismo `IAmazonDynamoDB`, sin cambios de código
+- [ ] Un `Dockerfile` por Lambda basado en `public.ecr.aws/lambda/dotnet:8` + **Runtime
+      Interface Emulator (RIE)** — expone cada función como HTTP interno
+      (`upload-service`, `indexer-service`, `query-service`, `documents-service`, `report-service`)
+- [ ] Contenedor **gateway** (Nginx o Traefik) que enruta `/upload`, `/query`,
+      `/documents`, `/reports` hacia el RIE de cada Lambda — simula API Gateway
+- [ ] Mock de Cognito: contenedor ligero que emite un JWT de prueba fijo, o middleware
+      que acepta ese JWT — no intentar emular Cognito real
+- [ ] Documentar la diferencia del trigger S3→Indexer: en local, `upload-service` invoca
+      directamente el endpoint HTTP de `indexer-service` tras el `PutObject` (en vez del
+      evento asíncrono `s3:ObjectCreated:*`, que LocalStack Community no encadena bien
+      a Lambda sin la versión Pro)
+- [ ] `.env` (no commiteado) con la API key real de Gemini + endpoints de LocalStack/DynamoDB Local, inyectados a cada contenedor
+- [ ] Frontend: `npm run dev` apuntando al gateway local en vez de a CloudFront/API Gateway real
+- [ ] Script único `docker-compose up` (o `Makefile`/`package.json` script) para levantar toda la topología con un comando
+- [ ] Sección "Entorno local (Docker Compose)" en `docs/architecture.md` con diagrama equivalente y lista de diferencias conocidas vs. AWS real
 
 ---
 
@@ -194,7 +247,7 @@ descarga.
 
 - [ ] Nunca commitear credenciales, access keys ni connection strings
 - [ ] Usar `dotnet user-secrets` en desarrollo local
-- [ ] Usar **Secrets Manager** o **SSM Parameter Store** en producción (no variables de entorno en texto plano para secretos)
+- [ ] Usar **Secrets Manager** o **SSM Parameter Store** en producción (no variables de entorno en texto plano para secretos) — incluye la API key de Gemini
 - [ ] Validar JWT de Cognito en todos los endpoints excepto `/health`
 - [ ] Configurar CORS correctamente en API Gateway (solo el origen de CloudFront)
 - [ ] Permisos IAM mínimos por Lambda (least privilege, sin `*` en resources)
@@ -202,4 +255,4 @@ descarga.
 
 ---
 
-_Stack: .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock · S3 · Cognito · CloudWatch · AWS SAM · GitHub Actions (OIDC) · React (Vite) + TypeScript_
+_Stack: .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Google Gemini API · S3 · Cognito · CloudWatch · Terraform · GitHub Actions (OIDC) · React (Vite) + TypeScript_
