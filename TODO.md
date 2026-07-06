@@ -69,15 +69,17 @@
 
 ## Fase 3 — `indexer-service` (Lambda, trigger por evento S3)
 
-- [ ] Crear proyecto `src/SemanticSearch.Functions.Indexer`
-- [ ] Handler `IndexerFunction.cs` — disparado por **S3 Event Notification** (`s3:ObjectCreated:*` sobre el bucket `docs`)
-- [ ] `Services/ChunkerService.cs` — reusar sliding window con overlap de la versión actual
-- [ ] Agregar soporte para `.pdf` con **PdfPig**
-- [ ] Agregar soporte para `.docx` con **DocumentFormat.OpenXml**
-- [ ] `Services/IGeminiEmbeddingService.cs` + `GeminiEmbeddingService.cs` — embeddings batch (`batchEmbedContents`, `task_type=RETRIEVAL_DOCUMENT`) contra la API de Gemini vía HttpClient
-- [ ] `Services/IDynamoChunkWriter.cs` + `DynamoChunkWriter.cs` — escribe `ChunkRecord` en DynamoDB
-- [ ] Manejar errores de indexación: mover el objeto a un prefijo `failed/` en S3 (equivalente a poison blob) en vez de DLQ gestionada (mantiene todo dentro de Always Free)
-- [ ] Confirmar que la función **no** está asociada a una VPC (necesita salida a internet gratis hacia la API de Gemini; una VPC exigiría NAT Gateway de pago)
+- [x] Crear proyecto `src/SemanticSearch.Functions.Indexer` (`Amazon.Lambda.S3Events` + `AWSSDK.S3` + `AWSSDK.DynamoDBv2` + `PdfPig` + `DocumentFormat.OpenXml`)
+- [x] Handler `IndexerFunction.cs` — recibe `S3Event` (mismo tipo que dispara `s3:ObjectCreated:*` en AWS real); parsea la key con la convención `{category}/{docId}/{filename}` fijada por `upload-service`
+- [x] `Services/ChunkerService.cs` — sliding window con overlap (512/64) portado de la versión anterior, devuelve `DocumentChunk` de `SemanticSearch.Core`
+- [x] `Services/ITextExtractorService.cs` + `TextExtractorService.cs` — soporte para `.pdf` (**PdfPig**) y `.docx` (**DocumentFormat.OpenXml**), portado de la versión anterior
+- [x] `Services/IGeminiEmbeddingService.cs` + `GeminiEmbeddingService.cs` — embeddings batch (`batchEmbedContents`, `taskType=RETRIEVAL_DOCUMENT`) contra la API de Gemini vía `HttpClient` estático (reutilizado entre invocaciones)
+- [x] `Services/IDynamoChunkWriter.cs` + `DynamoChunkWriter.cs` — escribe `ChunkRecord` en DynamoDB vía `IDynamoDBContext`, con `OverrideTableName` desde `DynamoDbOptions.TableName`
+- [x] `Services/IS3ObjectService.cs` + `S3ObjectService.cs` — descarga el objeto y maneja el movimiento a `failed/` (abstrae el SDK de S3 para que el handler sea mockeable en tests)
+- [x] Validación de **tamaño máximo** (10MB, la que quedó pendiente de Fase 2): si el objeto la supera, se mueve a `failed/` sin descargar ni llamar a Gemini
+- [x] Manejar errores de indexación (extracción, embeddings, escritura): mover el objeto a `failed/` en S3 en vez de DLQ gestionada (mantiene todo dentro de Always Free); un registro fallido no interrumpe el resto del batch del evento S3
+- [x] Confirmado (por diseño): no se referencia ningún recurso de VPC — el Lambda mantiene salida a internet gratis hacia la API de Gemini
+- [x] Tests (`tests/SemanticSearch.Functions.Indexer.Tests`) — 12 casos: 7 de `ChunkerService` (incluye propagación de metadata), 4 de `IndexerFunction` (documento válido, objeto sobredimensionado, fallo de extracción, key con formato inesperado), 1 de `GeminiEmbeddingService` (forma del request/response contra un `HttpMessageHandler` falso, sin llamar a la API real)
 
 ---
 
