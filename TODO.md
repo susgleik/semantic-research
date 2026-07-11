@@ -85,12 +85,13 @@
 
 ## Fase 4 — Pipeline de consulta RAG (Lambdas)
 
-- [ ] Crear proyecto `src/SemanticSearch.Functions.Query`
-- [ ] Handler `QueryFunction.cs` — recibe `POST /query`, orquesta embed → search → answer
-- [ ] `Services/IGeminiEmbeddingService.cs` — reusar lógica de embeddings (compartir vía `SemanticSearch.Core` o paquete interno), embeddear la pregunta con `task_type=RETRIEVAL_QUERY`
-- [ ] `Services/ISimilaritySearchService.cs` + `SimilaritySearchService.cs` — lee chunks candidatos de DynamoDB y calcula similitud coseno en memoria, retorna top-K
-- [ ] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Gemini (`gemini-2.0-flash`) para generar la respuesta con fuentes citadas
-- [ ] Modelos `QueryRequest.cs` / `QueryResponse.cs` / `SourceChunk.cs` (reusar de `SemanticSearch.Core`)
+- [x] Crear proyecto `src/SemanticSearch.Functions.Query`
+- [x] Handler `QueryFunction.cs` — recibe `POST /query`, orquesta embed → search → answer
+- [x] `Services/IGeminiEmbeddingService.cs` — movido a `SemanticSearch.Core.Services` (compartido con `indexer-service`), embeddea la pregunta con `task_type=RETRIEVAL_QUERY`
+- [x] `Services/ISimilaritySearchService.cs` + `SimilaritySearchService.cs` — lee chunks candidatos de DynamoDB (vía `IDynamoChunkReader`, scan completo) y calcula similitud coseno en memoria, retorna top-K
+- [x] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Gemini (`gemini-2.0-flash`, `generateContent`) para generar la respuesta con fuentes citadas
+- [x] Modelos `QueryRequest.cs` / `QueryResponse.cs` / `SourceChunk.cs` en `SemanticSearch.Core.Models`
+- [x] Tests (`tests/SemanticSearch.Functions.Query.Tests`) — 9 casos: 3 de `SimilaritySearchService` (ranking por coseno, topK, sin chunks), 2 de `RagAnswerService` (forma del prompt/respuesta contra `HttpMessageHandler` falso, fallback sin candidatos), 4 de `QueryFunction` (request válido, query faltante, JSON inválido, topK forwardeado)
 - [ ] Cachear (TTL corto en DynamoDB) preguntas repetidas para evitar re-embeddear y re-generar con Gemini en cada request
 
 ---
