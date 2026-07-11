@@ -98,10 +98,13 @@
 
 ## Fase 5 — `documents-service` (Lambda)
 
-- [ ] Crear proyecto `src/SemanticSearch.Functions.Documents`
-- [ ] Handler `DocumentsFunction.cs` — `GET /documents` (con paginación), `POST /reindex/{docId}`, `DELETE /documents/{docId}`
-- [ ] `Services/IDocumentRegistryService.cs` + `DocumentRegistryService.cs` — lee/escribe metadata de documentos en DynamoDB
-- [ ] `GET /health` — healthcheck simple (puede vivir en la misma función o en una función propia, ultraligera)
+- [x] Crear proyecto `src/SemanticSearch.Functions.Documents`
+- [x] Handler `DocumentsFunction.cs` — `GET /documents` (con paginación `limit`/`offset`), `POST /reindex/{docId}`, `DELETE /documents/{docId}`; enruta por método HTTP + path sobre `APIGatewayHttpApiV2ProxyRequest`
+- [x] `Services/IDocumentRegistryService.cs` + `DocumentRegistryService.cs` — no existe tabla `documents` separada: agrupa chunks por `DocumentId` desde un `Scan` de la tabla `chunks` (mismo trade-off que `query-service`); `GetChunksAsync`/`DeleteDocumentAsync` usan `Query`/`BatchWrite` por `DocumentId`
+- [x] `Services/IS3DocumentService.cs` + `S3DocumentService.cs` — `TriggerReindexAsync` hace `CopyObject` del documento sobre sí mismo para re-disparar el evento `s3:ObjectCreated` que consume `indexer-service` (no hay invocación directa Lambda→Lambda); `DeleteObjectAsync` borra el objeto original de S3 al eliminar el documento
+- [x] `GET /health` — healthcheck simple, vive en la misma función (sin auth; la exclusión del JWT authorizer para esta ruta es tarea de Fase 6/infra)
+- [x] Campo `Category` agregado a `ChunkRecord` (Fase 1) y poblado en `IndexerFunction` (Fase 3) — lo necesitaba `documents-service` para reconstruir la key de S3 (`{category}/{docId}/{filename}`) al reindexar/borrar
+- [x] Tests (`tests/SemanticSearch.Functions.Documents.Tests`) — 12 casos: 4 de `DocumentRegistryService.GroupAndPaginate` (agrupado, chunk fallido marca doc como failed, orden por fecha, límite/offset), 8 de `DocumentsFunction` (health, listado con paginación default/custom, reindex encontrado/404, delete encontrado/404, ruta desconocida)
 
 ---
 
