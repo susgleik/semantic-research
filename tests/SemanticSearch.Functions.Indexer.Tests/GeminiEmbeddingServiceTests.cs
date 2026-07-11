@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using SemanticSearch.Core.Options;
-using SemanticSearch.Functions.Indexer.Services;
+using SemanticSearch.Core.Services;
 
 namespace SemanticSearch.Functions.Indexer.Tests;
 

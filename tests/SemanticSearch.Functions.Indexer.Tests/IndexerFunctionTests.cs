@@ -3,6 +3,7 @@ using Amazon.Lambda.S3Events;
 using FluentAssertions;
 using Moq;
 using SemanticSearch.Core.Models;
+using SemanticSearch.Core.Services;
 using SemanticSearch.Functions.Indexer.Services;
 
 namespace SemanticSearch.Functions.Indexer.Tests;

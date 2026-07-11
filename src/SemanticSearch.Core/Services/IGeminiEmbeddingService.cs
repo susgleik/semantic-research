@@ -1,4 +1,4 @@
-namespace SemanticSearch.Functions.Indexer.Services;
+namespace SemanticSearch.Core.Services;
 
 public interface IGeminiEmbeddingService
 {

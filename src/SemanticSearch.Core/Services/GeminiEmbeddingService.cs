@@ -2,7 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using SemanticSearch.Core.Options;
 
-namespace SemanticSearch.Functions.Indexer.Services;
+namespace SemanticSearch.Core.Services;
 
 public class GeminiEmbeddingService(HttpClient httpClient, GeminiOptions options) : IGeminiEmbeddingService
 {
