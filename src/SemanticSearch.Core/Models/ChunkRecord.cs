@@ -17,6 +17,8 @@ public class ChunkRecord
 
     public string Filename { get; set; } = "";
 
+    public string Category { get; set; } = "";
+
     public int Page { get; set; }
 
     public string Status { get; set; } = "indexed";

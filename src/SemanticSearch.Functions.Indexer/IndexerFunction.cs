@@ -5,6 +5,7 @@ using Amazon.Lambda.S3Events;
 using Amazon.S3;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
+using SemanticSearch.Core.Services;
 using SemanticSearch.Functions.Indexer.Services;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
@@ -86,6 +87,7 @@ public class IndexerFunction
                 Text       = chunk.Text,
                 Embedding  = vector.ToList(),
                 Filename   = filename,
+                Category   = category,
                 Page       = chunk.Page,
                 Status     = "indexed",
                 CreatedAt  = now
