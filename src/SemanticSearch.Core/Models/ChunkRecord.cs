@@ -13,6 +13,7 @@ public class ChunkRecord
 
     public string Text { get; set; } = "";
 
+    [DynamoDBProperty(typeof(FloatListConverter))]
     public List<float> Embedding { get; set; } = [];
 
     public string Filename { get; set; } = "";
