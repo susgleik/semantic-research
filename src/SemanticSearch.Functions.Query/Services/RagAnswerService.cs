@@ -38,7 +38,12 @@ public class RagAnswerService(HttpClient httpClient, GeminiOptions options) : IR
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{options.ChatModel}:generateContent?key={options.ApiKey}";
 
         using var response = await httpClient.PostAsJsonAsync(url, requestBody, JsonOptions, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(
+                $"Gemini generateContent failed ({(int)response.StatusCode} {response.StatusCode}): {errorBody}");
+        }
 
         var result = await response.Content.ReadFromJsonAsync<GenerateContentResponse>(JsonOptions, ct);
         return result?.Candidates.FirstOrDefault()?.Content.Parts.FirstOrDefault()?.Text

@@ -26,7 +26,12 @@ public class GeminiEmbeddingService(HttpClient httpClient, GeminiOptions options
         var url = $"https://generativelanguage.googleapis.com/v1beta/{modelPath}:batchEmbedContents?key={options.ApiKey}";
 
         using var response = await httpClient.PostAsJsonAsync(url, requestBody, JsonOptions, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(
+                $"Gemini embedContent failed ({(int)response.StatusCode} {response.StatusCode}): {errorBody}");
+        }
 
         var result = await response.Content.ReadFromJsonAsync<BatchEmbedResponse>(JsonOptions, ct);
         return result?.Embeddings.Select(e => e.Values).ToList() ?? [];

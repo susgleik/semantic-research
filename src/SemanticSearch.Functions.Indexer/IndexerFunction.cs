@@ -131,8 +131,8 @@ public class IndexerFunction
     private static GeminiOptions LoadGeminiOptions() => new()
     {
         ApiKey              = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "",
-        EmbeddingModel      = Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_MODEL") ?? "text-embedding-004",
-        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-2.0-flash",
+        EmbeddingModel      = Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_MODEL") ?? "gemini-embedding-001",
+        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-2.5-flash",
         EmbeddingDimensions = int.TryParse(Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_DIMENSIONS"), out var d) ? d : 768
     };
 
