@@ -13,6 +13,10 @@ appsettings.*.local.json
 ## Azure Functions local settings (contienen credenciales)
 local.settings.json
 
+## AWS SAM (entorno local, Fase 12)
+.aws-sam/
+env.local.json
+
 ## Docker
 .dockerignore
 

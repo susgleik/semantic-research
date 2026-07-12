@@ -1,0 +1,18 @@
+{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "eventName": "ObjectCreated:Put",
+      "s3": {
+        "bucket": {
+          "name": "docs"
+        },
+        "object": {
+          "key": "contratos/9de8088d-9aa5-4cf0-8245-a61c98926bc9/contrato.pdf",
+          "size": 599
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /query",
+  "rawPath": "/query",
+  "requestContext": {
+    "http": { "method": "POST", "path": "/query" }
+  },
+  "body": "{\"query\":\"de que trata el contrato?\",\"topK\":3}",
+  "isBase64Encoded": false
+}

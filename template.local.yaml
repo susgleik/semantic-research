@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Entorno local (sin AWS) para probar la topologia de microservicios completa.
+  Ver docs/architecture.md#entorno-local-docker-compose---desarrollo-sin-aws.
+
+  Uso:
+    1. docker compose up -d          (LocalStack + DynamoDB Local + setup de bucket/tabla)
+    2. sam build --template template.local.yaml
+    3. sam local start-api --template template.local.yaml \
+         --docker-network semantic-search-net --env-vars env.local.json
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        AWS_REGION: us-east-1
+        S3_BUCKET_DOCS: docs
+        S3_SERVICE_URL: http://localstack:4566
+        DYNAMODB_TABLE_NAME: chunks
+        DYNAMODB_SERVICE_URL: http://dynamodb-local:8000
+        GEMINI_EMBEDDING_MODEL: gemini-embedding-001
+        GEMINI_CHAT_MODEL: gemini-2.5-flash
+        GEMINI_EMBEDDING_DIMENSIONS: "768"
+        # Placeholder vacío: el valor real lo inyecta env.local.json vía --env-vars
+        # (--env-vars solo sobrescribe variables que ya existen en el template).
+        GEMINI_API_KEY: ""
+
+Resources:
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Upload/
+      Handler: SemanticSearch.Functions.Upload::SemanticSearch.Functions.Upload.UploadFunction::FunctionHandler
+      Events:
+        Upload:
+          Type: HttpApi
+          Properties:
+            Path: /upload
+            Method: post
+
+  # Sin ruta HTTP: en AWS real la dispara un S3 Event Notification (s3:ObjectCreated:*).
+  # Local: se invoca directo con
+  #   sam local invoke IndexerFunction --template template.local.yaml \
+  #     --event events/s3-put-event.json --docker-network semantic-search-net --env-vars env.local.json
+  # (upload-service NO la invoca automaticamente en local; ver nota en docs/architecture.md)
+  IndexerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Indexer/
+      Handler: SemanticSearch.Functions.Indexer::SemanticSearch.Functions.Indexer.IndexerFunction::FunctionHandler
+
+  QueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Query/
+      Handler: SemanticSearch.Functions.Query::SemanticSearch.Functions.Query.QueryFunction::FunctionHandler
+      Events:
+        Query:
+          Type: HttpApi
+          Properties:
+            Path: /query
+            Method: post
+
+  DocumentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Documents/
+      Handler: SemanticSearch.Functions.Documents::SemanticSearch.Functions.Documents.DocumentsFunction::FunctionHandler
+      Events:
+        List:
+          Type: HttpApi
+          Properties:
+            Path: /documents
+            Method: get
+        Reindex:
+          Type: HttpApi
+          Properties:
+            Path: /reindex/{docId}
+            Method: post
+        Delete:
+          Type: HttpApi
+          Properties:
+            Path: /documents/{docId}
+            Method: delete
+        Health:
+          Type: HttpApi
+          Properties:
+            Path: /health
+            Method: get
