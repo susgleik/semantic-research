@@ -198,33 +198,42 @@ descarga.
 
 ---
 
-## Fase 12 — Entorno local con Docker Compose (sin AWS)
+## Fase 12 — Entorno local con Docker Compose + SAM CLI (sin AWS)
 
 > Réplica local de la topología de microservicios + red interna mientras se espera
 > la aprobación para tocar la cuenta de AWS. Usa el **mismo código de Lambda** que se
 > despliega después (sin reescribir a ASP.NET Core) y llama a la **API real de Gemini**
-> (la IA no se mockea). Diferencias conocidas vs. producción quedan documentadas en
-> `docs/architecture.md`.
+> (la IA no se mockea). **Probado end-to-end** (upload → indexer → query → documents),
+> con respuesta real de Gemini citando la fuente correcta. Referencia completa de
+> comandos, configuración y problemas encontrados en
+> [`docs/local-development.md`](docs/local-development.md).
 
-- [ ] `docker-compose.yml` raíz con una red Docker dedicada (`bridge`) que simula la
-      segmentación de red interna entre servicios
-- [ ] Contenedor **LocalStack** (Community, gratis) para S3 (`docs`, `reports`, `frontend`) — mismo `IAmazonS3`, solo cambia el endpoint a `localhost`
-- [ ] Contenedor **DynamoDB Local** (imagen oficial `amazon/dynamodb-local`) o LocalStack — mismo `IAmazonDynamoDB`, sin cambios de código
-- [ ] Un `Dockerfile` por Lambda basado en `public.ecr.aws/lambda/dotnet:8` + **Runtime
-      Interface Emulator (RIE)** — expone cada función como HTTP interno
-      (`upload-service`, `indexer-service`, `query-service`, `documents-service`, `report-service`)
-- [ ] Contenedor **gateway** (Nginx o Traefik) que enruta `/upload`, `/query`,
-      `/documents`, `/reports` hacia el RIE de cada Lambda — simula API Gateway
-- [ ] Mock de Cognito: contenedor ligero que emite un JWT de prueba fijo, o middleware
-      que acepta ese JWT — no intentar emular Cognito real
-- [ ] Documentar la diferencia del trigger S3→Indexer: en local, `upload-service` invoca
-      directamente el endpoint HTTP de `indexer-service` tras el `PutObject` (en vez del
-      evento asíncrono `s3:ObjectCreated:*`, que LocalStack Community no encadena bien
-      a Lambda sin la versión Pro)
-- [ ] `.env` (no commiteado) con la API key real de Gemini + endpoints de LocalStack/DynamoDB Local, inyectados a cada contenedor
-- [ ] Frontend: `npm run dev` apuntando al gateway local en vez de a CloudFront/API Gateway real
-- [ ] Script único `docker-compose up` (o `Makefile`/`package.json` script) para levantar toda la topología con un comando
-- [ ] Sección "Entorno local (Docker Compose)" en `docs/architecture.md` con diagrama equivalente y lista de diferencias conocidas vs. AWS real
+> **Cambio de diseño respecto al plan original:** en vez de un gateway custom
+> (Nginx/Traefik) traduciendo HTTP → evento Lambda a mano, se usa **AWS SAM CLI**
+> (`sam local start-api` / `sam local invoke`), la herramienta oficial de AWS para
+> esto — ya iba a instalarse para el deploy real (Fase 0), evita reimplementar lo que
+> hace API Gateway, y los contenedores RIE (`public.ecr.aws/lambda/dotnet:8-rapid`)
+> los maneja SAM automáticamente vía `sam build`, sin necesidad de un `Dockerfile`
+> propio por función.
+
+- [x] `docker-compose.yml` raíz con red Docker dedicada (`semantic-search-net`) — LocalStack (S3) + DynamoDB Local + un contenedor `setup` que crea el bucket `docs`/`reports` y la tabla `chunks` al levantar
+- [x] LocalStack pineado a `3.8` (no `latest` — la versión `latest` actual intenta activar licencia Pro y falla sin `LOCALSTACK_AUTH_TOKEN`) con `LOCALSTACK_AUTH_TOKEN: ""` explícito
+- [x] DynamoDB Local corre con `-inMemory` (no con volumen persistente — la imagen corre como usuario no-root y no puede escribir en un volumen nombrado de Docker Desktop/Windows; sin persistencia entre reinicios, igual que LocalStack para desarrollo)
+- [x] `template.local.yaml` — define los 4 Lambdas HTTP (`UploadFunction`, `QueryFunction`, `DocumentsFunction`) + `IndexerFunction` sin ruta HTTP (se invoca manual, ver abajo), con `Globals.Function.Environment.Variables` apuntando a `http://localstack:4566` / `http://dynamodb-local:8000` (nombres de contenedor, no `localhost`)
+- [x] `env.local.example.json` (commiteado) + `env.local.json` (gitignored) con `GEMINI_API_KEY` por función — **requiere un placeholder `GEMINI_API_KEY: ""` en `template.local.yaml`**, ya que `sam local --env-vars` solo sobrescribe variables que ya existen en el template, no inyecta nombres nuevos
+- [x] `sam build --template template.local.yaml` empaqueta las 4 Lambdas contra el runtime `dotnet8`
+- [x] `sam local start-api --template .aws-sam/build/template.yaml --docker-network semantic-search-net --env-vars env.local.json` — **ojo:** el `--template` debe apuntar al template ya compilado (`.aws-sam/build/template.yaml`), no al fuente (`template.local.yaml`), o monta el código sin publicar y tira "missing .deps.json"
+- [x] `events/s3-put-event.json` + `events/query-event.json` + `events/documents-list-event.json` — eventos de ejemplo para invocar cada Lambda a mano
+- [x] Confirmado el flujo de upload: `POST /upload` → URL prefirmada de S3 con host `localstack` (nombre interno de red) → subir con `curl.exe --resolve localstack:4566:127.0.0.1 -k` desde el host (fuera de la red Docker, `localstack` no resuelve por DNS y el cliente S3 firma en `https://` aunque LocalStack sirve HTTP plano)
+- [x] `indexer-service` se invoca manual con `sam local invoke IndexerFunction --event events/s3-put-event.json` (upload-service **no** la invoca automáticamente en local — la key/tamaño del evento hay que actualizarlos a mano por cada prueba)
+- [x] **Bugs reales encontrados y corregidos durante la prueba end-to-end** (no específicos de Docker, afectaban también a producción):
+  - `text-embedding-004` no está disponible para la cuenta de Gemini en uso → default cambiado a `gemini-embedding-001` en `GeminiOptions.cs`, `IndexerFunction.cs`, `QueryFunction.cs`
+  - `gemini-2.0-flash` fue dado de baja por Google ("no longer available") → default cambiado a `gemini-2.5-flash`
+  - `GeminiEmbeddingService`/`RagAnswerService` solo hacían `EnsureSuccessStatusCode()` sin capturar el body del error — se agregó captura del body de Gemini en la excepción (crítico para poder diagnosticar los dos puntos anteriores)
+  - `ChunkRecord.Embedding` (`List<float>`) se guardaba en DynamoDB como **Number Set (NS)** por el converter default del SDK — los Sets no garantizan orden y descartan valores duplicados, corrompiendo el vector silenciosamente. Se agregó `FloatListConverter : IPropertyConverter` + `[DynamoDBProperty(typeof(FloatListConverter))]` para forzar almacenamiento como **List (L)** ordenada
+- [ ] Mock de Cognito para probar rutas con auth (ninguna ruta actual la exige todavía — Fase 6 pendiente)
+- [ ] Frontend: `npm run dev` apuntando al gateway local (pendiente de Fase 7)
+- [x] Sección "Entorno local (Docker Compose)" en `docs/architecture.md` — **desactualizada**: describe el gateway Nginx/Traefik del plan original, hay que reescribirla para reflejar SAM CLI
 
 ---
 

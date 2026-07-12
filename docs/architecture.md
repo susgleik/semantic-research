@@ -55,7 +55,7 @@ graph LR
         end
 
         subgraph AILayer["IA Generativa — externa"]
-            Gemini["Google Gemini API\ngemini-embedding-001 / text-embedding-004\ngemini-2.0-flash"]:::ai
+            Gemini["Google Gemini API\ngemini-embedding-001\ngemini-2.5-flash"]:::ai
         end
     end
 
@@ -131,7 +131,7 @@ Cliente ──POST /query──► API Gateway ──► Lambda (query-service)
                                            build RAG prompt
                                                     ▼
                                           Google Gemini API
-                                          (gemini-2.0-flash)
+                                          (gemini-2.5-flash)
                                                     │
 Cliente ◄── { answer, sources } ───────────────────┘
 ```
@@ -139,7 +139,7 @@ Cliente ◄── { answer, sources } ──────────────
 1. El cliente envía la pregunta en lenguaje natural
 2. `query-service` genera el embedding de la pregunta con Gemini (`task_type=RETRIEVAL_QUERY`)
 3. Lee todos los chunks de DynamoDB y calcula similitud coseno en memoria, retorna top-K
-4. Arma un prompt RAG con los fragmentos más relevantes y llama a `gemini-2.0-flash`
+4. Arma un prompt RAG con los fragmentos más relevantes y llama a `gemini-2.5-flash`
 5. Devuelve la respuesta con fuentes citadas (`documentId`, `filename`, `page`, `score`)
 
 ### Pipeline C — Generación de informes
@@ -154,7 +154,7 @@ Cliente ──POST /reports──► API Gateway ──► Lambda (report-servic
                                          genera con Gemini
                                                     ▼
                                           Google Gemini API
-                                          (gemini-2.0-flash)
+                                          (gemini-2.5-flash)
                                                     │
                                            guarda el informe
                                                     ▼
@@ -207,7 +207,7 @@ base de conocimiento privada de documentos de empresa — el tier gratuito de AI
 no da esa garantía).
 
 - **Modelos:** `gemini-embedding-001` (truncado vía MRL a 768 dims) o
-  `text-embedding-004` (768 dims fijas) para embeddings; `gemini-2.0-flash` /
+  `text-embedding-004` (no disponible para todas las cuentas) para embeddings; `gemini-2.5-flash` /
   `2.5-flash` para las respuestas RAG y los reportes.
 - **`task_type`:** Gemini permite indicar el propósito del embedding —
   `RETRIEVAL_DOCUMENT` al indexar chunks, `RETRIEVAL_QUERY` al embeddear la pregunta
@@ -256,7 +256,7 @@ complejidad).
 | `documentId` | String | Partition Key |
 | `chunkId` | String | Sort Key |
 | `text` | String | texto del chunk |
-| `embedding` | List\<Number\> | vector de embedding (Gemini `text-embedding-004` / `gemini-embedding-001` truncado vía MRL = 768 dims) |
+| `embedding` | List (forzado vía `FloatListConverter`, no Number Set) | vector de embedding (Gemini `gemini-embedding-001`, 3072 dims — truncado a 768 vía MRL pendiente, ver Fase 4) |
 | `filename` | String | nombre original del documento |
 | `page` | Number | página de origen (si aplica) |
 | `status` | String | `indexed` / `failed` |
@@ -311,12 +311,21 @@ el bucket frontend sin exponerlo públicamente.
 
 ---
 
-## Entorno local (Docker Compose) — desarrollo sin AWS
+## Entorno local (Docker Compose + SAM CLI) — desarrollo sin AWS
 
 Mientras se espera la aprobación para desplegar en la cuenta de AWS, toda la topología
-de microservicios + red interna se puede levantar localmente con Docker Compose, usando
-el **mismo código de Lambda** que después se despliega (sin reescribir a ASP.NET Core)
-y llamando a la **API real de Gemini** — la IA no se mockea, es lo que se está probando.
+de microservicios + red interna se levanta localmente con Docker Compose + **AWS SAM
+CLI**, usando el **mismo código de Lambda** que después se despliega (sin reescribir a
+ASP.NET Core) y llamando a la **API real de Gemini** — la IA no se mockea. **Probado
+end-to-end** (upload → indexer → query → documents) con respuesta real de Gemini.
+
+> El plan original consideraba un gateway custom (Nginx/Traefik) traduciendo HTTP a
+> mano al formato de invocación de Lambda. Se descartó: los contenedores RIE
+> (`public.ecr.aws/lambda/dotnet:8`) no hablan HTTP normal, exponen la Lambda Invoke
+> API (`POST /2015-03-31/functions/function/invocations`) con el evento ya serializado
+> — replicar esa traducción a mano es reimplementar buena parte de lo que hace API
+> Gateway. **AWS SAM CLI** (`sam local start-api`) ya hace exactamente esto, es la
+> herramienta oficial de AWS, y ya iba a instalarse para el deploy real (Fase 0).
 
 ```mermaid
 graph LR
@@ -326,36 +335,30 @@ graph LR
     classDef storage   fill:#3F8624,stroke:#2D6018,color:#fff
     classDef database  fill:#C7131F,stroke:#9A0E17,color:#fff
     classDef ai        fill:#01A88D,stroke:#018570,color:#fff
-    classDef mock      fill:#555,stroke:#333,color:#fff
 
-    Browser(["Browser\nReact SPA (npm run dev)"]):::external
+    Browser(["Browser / curl\n(host de Windows)"]):::external
 
-    subgraph DockerNet["Red Docker Compose interna"]
-        GW["Gateway\nNginx/Traefik"]:::network
-        AuthMock["Auth mock\nJWT stub"]:::mock
+    subgraph DockerNet["Red Docker: semantic-search-net"]
+        GW["sam local start-api\n(gateway HTTP :3000)"]:::network
 
-        Upload["upload-service\nRIE container"]:::compute
-        Indexer["indexer-service\nRIE container"]:::compute
-        Query["query-service\nRIE container"]:::compute
-        Docs["documents-service\nRIE container"]:::compute
-        ReportFn["report-service\nRIE container"]:::compute
+        Upload["UploadFunction\ncontenedor RIE"]:::compute
+        Indexer["IndexerFunction\ncontenedor RIE\n(invocación manual)"]:::compute
+        Query["QueryFunction\ncontenedor RIE"]:::compute
+        Docs["DocumentsFunction\ncontenedor RIE"]:::compute
 
-        LocalS3["LocalStack\nS3 (docs/reports)"]:::storage
-        LocalDynamo["DynamoDB Local\ntabla chunks"]:::database
+        LocalS3["LocalStack 3.8\nS3 (docs/reports)"]:::storage
+        LocalDynamo["DynamoDB Local\n-inMemory, tabla chunks"]:::database
     end
 
     Gemini["Google Gemini API\n(real, no mockeada)"]:::ai
 
     Browser --> GW
-    AuthMock -. "JWT de prueba" .-> GW
-
     GW --> Upload
     GW --> Query
     GW --> Docs
-    GW --> ReportFn
 
     Upload --> LocalS3
-    Upload -->|"invocación directa\n(reemplaza S3 Event)"| Indexer
+    Indexer --> LocalS3
     Indexer --> Gemini
     Indexer --> LocalDynamo
 
@@ -363,27 +366,52 @@ graph LR
     Query --> Gemini
 
     Docs --> LocalDynamo
-
-    ReportFn --> LocalDynamo
-    ReportFn --> Gemini
-    ReportFn --> LocalS3
 ```
 
 | Pieza AWS | Equivalente local | Nota |
 |---|---|---|
-| Lambda | Contenedor por función, imagen `public.ecr.aws/lambda/dotnet:8` + Runtime Interface Emulator (RIE) | Mismo handler que se despliega a AWS, cero reescritura |
-| API Gateway | Contenedor gateway (Nginx/Traefik) enrutando por path hacia el RIE de cada función | Simula el ruteo, no la facturación ni el JWT Authorizer nativo |
-| S3 | LocalStack (Community, gratis) | Mismo `IAmazonS3`, solo cambia el endpoint |
-| DynamoDB | DynamoDB Local (`amazon/dynamodb-local`) o LocalStack | Mismo `IAmazonDynamoDB`, compatibilidad de API 1:1 |
-| Cognito | JWT stub (contenedor ligero que emite un token de prueba fijo) | Cognito real no se emula bien en local; para desarrollo basta un JWT válido |
-| Red interna / VPC | Red Docker Compose dedicada (`bridge`) | Simula la segmentación de red sin costo |
+| Lambda + API Gateway | `sam local start-api --docker-network semantic-search-net` | SAM arma el contenedor RIE de cada función y traduce HTTP↔evento Lambda automáticamente |
+| S3 | LocalStack **3.8** (no `latest` — versiones más nuevas piden licencia Pro) | Mismo `IAmazonS3`, endpoint `http://localstack:4566` dentro de la red, `localhost:4566` desde el host |
+| DynamoDB | DynamoDB Local (`amazon/dynamodb-local`, modo `-inMemory`) | Mismo `IAmazonDynamoDB`; sin volumen persistente por un problema de permisos del usuario no-root de la imagen en Docker Desktop/Windows |
+| Cognito | Sin mock todavía | Ninguna ruta actual exige auth — se resuelve en Fase 6 |
+| Red interna / VPC | Red Docker dedicada (`semantic-search-net`) | Los contenedores se resuelven por nombre (`localstack`, `dynamodb-local`) |
 | Bedrock/Gemini | **Real** — llamada directa a la API de Gemini desde los contenedores | La IA nunca se mockea |
 
-**Diferencia conocida vs. producción:** el trigger de S3 (`s3:ObjectCreated:*` →
-`indexer-service`) es asíncrono, y LocalStack Community no lo encadena de forma
-confiable a Lambda sin la versión Pro. En local, `upload-service` invoca directamente
-el endpoint HTTP de `indexer-service` después del `PutObject` — documentado aquí como
-una simplificación deliberada, no como paridad total con AWS.
+**Comandos:**
+
+```bash
+docker compose up -d                       # LocalStack + DynamoDB Local + setup (bucket/tabla)
+sam build --template template.local.yaml
+sam local start-api --template .aws-sam/build/template.yaml \
+  --docker-network semantic-search-net --env-vars env.local.json
+```
+
+`indexer-service` no tiene ruta HTTP (en AWS real la dispara un S3 Event
+Notification) — se invoca a mano con `sam local invoke IndexerFunction --event
+events/s3-put-event.json ...` después de subir un archivo con la URL prefirmada que
+devuelve `/upload`.
+
+**Diferencias conocidas vs. producción:**
+- El trigger de S3 (`s3:ObjectCreated:*` → `indexer-service`) es asíncrono; en local
+  no hay nada que lo dispare automáticamente — hay que invocar `IndexerFunction` a
+  mano con un evento de ejemplo (`events/s3-put-event.json`), actualizando la key al
+  docId real de cada prueba.
+- La URL prefirmada que genera `upload-service` usa el hostname interno de Docker
+  (`localstack`), que no resuelve desde el host de Windows — para subir un archivo
+  desde fuera de la red hay que forzar la resolución (`curl --resolve
+  localstack:4566:127.0.0.1`) e ignorar el certificado autofirmado (`-k`), ya que el
+  cliente S3 firma la URL en `https://` aunque LocalStack sirve HTTP plano.
+
+**Bugs reales encontrados durante la prueba end-to-end** (no específicos de Docker —
+afectaban también al deploy real):
+- `gemini-embedding-001` reemplaza a `text-embedding-004` como modelo de embeddings
+  por defecto (no disponible para la cuenta en uso).
+- `gemini-2.5-flash` reemplaza a `gemini-2.0-flash` como modelo de chat por defecto
+  (dado de baja por Google).
+- `ChunkRecord.Embedding` se guardaba como **Number Set** en DynamoDB (el converter
+  default del SDK para `List<primitivo>`) en vez de **List** — los Sets no garantizan
+  orden y descartan duplicados, corrompiendo el vector. Se agregó un
+  `IPropertyConverter` (`FloatListConverter`) para forzar el tipo `List`.
 
 Con esto se puede desarrollar y demostrar la separación de microservicios, el ruteo
 tipo API Gateway y la red interna — el requisito de la materia — sin tocar la cuenta
