@@ -180,21 +180,25 @@ en el corpus completo de documentos indexados — diferente al chat RAG donde se
 hace una pregunta puntual. El informe se guarda en S3 y queda disponible para
 descarga.
 
-- [ ] Crear proyecto `src/SemanticSearch.Functions.Reports`
-- [ ] Handler `ReportFunction.cs` — `POST /reports` (recibe escenario + parámetros) y `GET /reports/{reportId}` (descarga el informe generado)
-- [ ] `Models/ReportRequest.cs` — escenario elegido + parámetros opcionales (rango de fechas, categoría de documentos, instrucción personalizada)
-- [ ] `Models/ReportResponse.cs` — `reportId`, `status` (`generating` / `ready`), `downloadUrl`
-- [ ] `Services/IReportGeneratorService.cs` + `ReportGeneratorService.cs` — lee chunks de DynamoDB por filtro y llama a Gemini (`gemini-2.0-flash`) para generar el informe; usar map-reduce (resumir por documento y luego combinar) en vez de meter el corpus completo en un solo prompt, para controlar el consumo de créditos
-- [ ] `Services/IReportStorageService.cs` + `ReportStorageService.cs` — guarda el informe generado (texto o PDF) en S3 bucket `reports` y genera una URL prefirmada de descarga
-- [ ] Escenarios predefinidos (plantillas de prompt):
+- [x] Crear proyecto `src/SemanticSearch.Functions.Reports`
+- [x] Handler `ReportFunction.cs` — `POST /reports` (recibe escenario + parámetros) y `GET /reports/{reportId}` (descarga el informe generado); ambos endpoints reusan `IReportStorageService.GetDownloadUrlAsync` para (re)generar la URL prefirmada — no hay un paso `generating` real: la generación es síncrona dentro del propio `POST /reports` (por eso el `ReportsFunction` tiene `Timeout: 120` en vez de los 30s default de `Globals`, ver `template.local.yaml`)
+- [x] `Models/ReportRequest.cs` — escenario elegido + parámetros opcionales (`category`, `documentIds`, `instruction`, `dateFrom`/`dateTo`) en `SemanticSearch.Core.Models`
+- [x] `Models/ReportResponse.cs` — `reportId`, `status` (`ready`), `downloadUrl` en `SemanticSearch.Core.Models`; `Models/ReportScenarios.cs` centraliza los 5 escenarios válidos para que el handler los valide
+- [x] `Services/IReportGeneratorService.cs` + `ReportGeneratorService.cs` — filtra chunks (categoría/documentIds/rango de fechas, método estático `FilterChunks` testeable sin SDK) y hace **map-reduce** con Gemini vía `IReportChatService`: 1 llamada por documento (map) + 1 de combinación final (reduce), en vez de un solo prompt con el corpus completo
+- [x] `Services/IReportChatService.cs` + `ReportChatService.cs` — wrapper de `generateContent` de Gemini (mismo patrón que `RagAnswerService` de `query-service`, pero genérico para prompts de reporte)
+- [x] `Services/IReportChunkReader.cs` + `ReportChunkReader.cs` — `Scan` completo de la tabla `chunks` (mismo trade-off ya documentado en `query-service`/`documents-service`)
+- [x] `Services/IReportStorageService.cs` + `ReportStorageService.cs` — guarda el informe generado (Markdown) en S3 bucket `reports` (`{reportId}.md`) y genera una URL prefirmada de descarga (15 min TTL); devuelve `null` si el objeto no existe (usado para el 404 de `GET /reports/{reportId}`)
+- [x] Escenarios predefinidos (plantillas de prompt húmedas en `ReportGeneratorService`, distintas para el paso map y el paso reduce):
   - `summary` — resumen ejecutivo del corpus completo
   - `risks` — detección de riesgos o inconsistencias entre documentos
-  - `compare` — comparativa entre dos documentos específicos (recibe dos `documentId`)
+  - `compare` — comparativa entre dos documentos específicos (recibe dos `documentId`, validado en el handler)
   - `extract` — extracción de datos clave (fechas, nombres, cláusulas)
-  - `custom` — el usuario escribe libremente qué quiere analizar
-- [ ] Vista en el frontend: selector de escenario + parámetros → botón "Generar informe" → estado `generando...` → botón de descarga cuando esté listo
-- [ ] Agregar bucket S3 `reports` en `infra/template.yaml` con política de expiración de objetos (ej. 7 días) para no acumular archivos
-- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `ssm:GetParameter` sobre el parámetro de la API key de Gemini (no requiere permisos de Bedrock)
+  - `custom` — el usuario escribe libremente qué quiere analizar (`instruction` obligatorio, validado en el handler)
+- [ ] Vista en el frontend: selector de escenario + parámetros → botón "Generar informe" → estado `generando...` → botón de descarga cuando esté listo (pendiente de Fase 7)
+- [x] Bucket S3 `reports` — ya lo crea el contenedor `setup` de `docker-compose.yml` (Fase 12); la política de expiración de objetos (7 días) y el bucket de producción quedan para Terraform (Fase 10), ya que no existe `infra/template.yaml` de AWS real en este repo (solo `template.local.yaml` para el entorno local)
+- [x] Lambda `ReportsFunction` agregada a `template.local.yaml` (`POST /reports`, `GET /reports/{reportId}`) + `S3_BUCKET_REPORTS` en `Globals.Function.Environment.Variables`
+- [x] Tests (`tests/SemanticSearch.Functions.Reports.Tests`) — 18 casos: 5 de `ReportGeneratorService.FilterChunks`/`GenerateReportAsync` (filtros por categoría/documentIds/fecha, map-reduce con N+1 llamadas, orden de chunks dentro de un documento), 3 de `ReportChatService` (forma del request/response y error body contra `HttpMessageHandler` falso), 10 de `ReportFunction` (creación válida, escenario faltante/desconocido, `compare` sin 2 `documentIds`, `custom` sin `instruction`, JSON inválido, GET encontrado/404, ruta desconocida)
+- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `ssm:GetParameter` sobre el parámetro de la API key de Gemini (no requiere permisos de Bedrock) — pendiente de Fase 10 (Terraform)
 
 ---
 

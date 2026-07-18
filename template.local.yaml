@@ -19,6 +19,7 @@ Globals:
       Variables:
         AWS_REGION: us-east-1
         S3_BUCKET_DOCS: docs
+        S3_BUCKET_REPORTS: reports
         S3_SERVICE_URL: http://localstack:4566
         DYNAMODB_TABLE_NAME: chunks
         DYNAMODB_SERVICE_URL: http://dynamodb-local:8000
@@ -91,4 +92,24 @@ Resources:
           Type: HttpApi
           Properties:
             Path: /health
+            Method: get
+
+  # Timeout mas alto que el resto: hace map-reduce (1 llamada a Gemini por documento del
+  # corpus filtrado + 1 de combinacion final), puede superar los 30s por defecto de Globals.
+  ReportsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Reports/
+      Handler: SemanticSearch.Functions.Reports::SemanticSearch.Functions.Reports.ReportFunction::FunctionHandler
+      Timeout: 120
+      Events:
+        Create:
+          Type: HttpApi
+          Properties:
+            Path: /reports
+            Method: post
+        Get:
+          Type: HttpApi
+          Properties:
+            Path: /reports/{reportId}
             Method: get
