@@ -110,10 +110,10 @@
 
 ## Fase 6 — Auth (Amazon Cognito)
 
-- [ ] Crear User Pool de Cognito + App Client
-- [ ] Configurar **JWT Authorizer** nativo de API Gateway HTTP API contra el User Pool (sin código de validación manual)
-- [ ] Excluir `/health` del authorizer
-- [ ] Documentar flujo de login (Cognito Hosted UI o SDK) para el frontend
+- [x] Crear User Pool de Cognito + App Client — `infra/cognito.tf` (Fase 10): `aws_cognito_user_pool` + `aws_cognito_user_pool_client` (SPA pública, sin secret) + `aws_cognito_user_pool_domain` (Hosted UI)
+- [x] Configurar **JWT Authorizer** nativo de API Gateway HTTP API contra el User Pool (sin código de validación manual) — `infra/apigateway.tf`, `aws_apigatewayv2_authorizer` tipo `JWT`
+- [x] Excluir `/health` del authorizer — única ruta con `authorization_type = "NONE"` en `infra/apigateway.tf`
+- [ ] Documentar flujo de login (Cognito Hosted UI o SDK) para el frontend — pendiente de que el frontend (Fase 7) consuma `cognito_user_pool_id`/`cognito_client_id`/`cognito_domain` (outputs de Terraform, Fase 10)
 
 ---
 
@@ -156,20 +156,35 @@
 
 ## Fase 10 — Infraestructura como código (Terraform)
 
-> IaC migrado de AWS SAM y Bicep (Azure) a **Terraform**. Reemplaza `infra/template.yaml` y los archivos `*.bicep`.
+> IaC migrado de AWS SAM y Bicep (Azure) a **Terraform**. Reemplaza `infra/template.yaml` y los archivos `*.bicep`
+> (archivados en `infra/_legacy-azure/`, Fase 0). Archivos planos en `infra/` (Terraform
+> carga todos los `.tf` de un directorio juntos, no hace falta un solo `main.tf`
+> monolítico). Ver `docs/terraform-setup.md` para el flujo completo de bootstrap/deploy.
 
-- [ ] `infra/main.tf` — recursos principales: Lambdas, API Gateway HTTP API, S3 (docs/frontend/reports), DynamoDB, Cognito User Pool
-- [ ] `infra/variables.tf` — variables de entorno y región (`aws_region`, nombres de bucket, tabla DynamoDB, etc.)
-- [ ] `infra/outputs.tf` — outputs del despliegue (URL de API Gateway, nombre de distribución CloudFront, ARNs)
-- [ ] `infra/backend.tf` — backend remoto S3 + locking con DynamoDB para el estado de Terraform
-- [ ] Definir tabla DynamoDB: PK `documentId`, SK `chunkId`, GSI si se necesita listar por fecha
-- [ ] Definir bucket S3 `docs` con notificación de evento (`aws_s3_bucket_notification`) hacia `indexer-service`
-- [ ] Definir bucket S3 `frontend` + distribución CloudFront con OAC (`aws_cloudfront_distribution`)
-- [ ] Definir bucket S3 `reports` con política de expiración de objetos (7 días)
-- [ ] Definir API Gateway HTTP API con rutas hacia cada Lambda + JWT Authorizer de Cognito
-- [ ] `infra/terraform.tfvars.example` — plantilla de variables (nunca commitear el `.tfvars` real)
-- [ ] Permisos IAM mínimos por función (cada Lambda solo accede a lo que necesita — least privilege)
-- [ ] Reemplazar `sam build && sam deploy` por `terraform init && terraform plan && terraform apply` en los workflows de CI/CD
+- [x] Backend remoto S3 (`semantic-search-tfstate-<account_id>`) + tabla DynamoDB de
+      lock (`semantic-search-tfstate-lock`) — bootstrapeados una sola vez con AWS CLI
+      (no con Terraform, problema de huevo-y-gallina), documentado en `docs/terraform-setup.md`
+- [x] `infra/providers.tf` + `infra/backend.tf` — provider `hashicorp/aws` ~>5.0, backend `s3`
+- [x] `infra/variables.tf` — `aws_region`, `project_prefix`, `gemini_ssm_parameter_name`, capacidad de DynamoDB, orígenes CORS, callback/logout URLs de Cognito
+- [x] `infra/dynamodb.tf` — tabla `chunks`: hash key `DocumentId`, range key `ChunkId` (coincide con `ChunkRecord.cs`), `PROVISIONED` 5/5 RCU-WCU (dentro del Always Free de 25/25)
+- [x] `infra/s3.tf` — buckets `docs`/`reports`/`frontend` (nombre con account id para unicidad global), block public access en los 3, CORS en `docs`/`reports`, lifecycle de 7 días en `reports`, notificación `docs → indexer-service` (todo el bucket; el guard de código contra `failed/` evita el loop, ver abajo)
+- [x] `infra/cloudfront.tf` — distribución + `aws_cloudfront_origin_access_control` sobre el bucket `frontend`, error responses 403/404 → `/index.html` (SPA routing)
+- [x] `infra/cognito.tf` — User Pool + App Client (SPA, sin secret) + Hosted UI domain (cierra la parte de infra de Fase 6)
+- [x] `infra/apigateway.tf` — HTTP API, `aws_apigatewayv2_authorizer` JWT contra Cognito, rutas de `docs/architecture.md` (todas con authorizer excepto `GET /health`), integraciones `AWS_PROXY` + permisos de invocación
+- [x] `infra/lambda.tf` — 5 `aws_lambda_function` (runtime `dotnet8`, handlers iguales a `template.local.yaml`) + un `aws_iam_role`/policy inline **least-privilege** por función (tabla de permisos en `docs/terraform-setup.md`/plan de Fase 10)
+- [x] `infra/outputs.tf` — URL de API Gateway, dominio CloudFront, IDs de Cognito, nombres de buckets/tabla
+- [x] `infra/terraform.tfvars.example` — plantilla de variables (el `.tfvars` real gitignored)
+- [x] `infra/scripts/build-lambdas.ps1` — `dotnet publish` + zip de los 5 Lambdas a `infra/publish/*.zip` (gitignored), referenciados por `source_code_hash` en `lambda.tf`; correr antes de cada `plan`/`apply` que cambie código
+- [x] Permisos IAM mínimos por función — ver tabla en `docs/terraform-setup.md` (cada Lambda solo con los verbos/recursos que usa, sin `*`)
+- [x] `terraform fmt`/`validate`/`init`/`plan`/**`apply`** corridos — **57 recursos creados en AWS real** (`us-east-1`), `terraform plan` posterior confirma 0 drift. `GET /health` responde `200`, rutas con JWT devuelven `401` sin token (comportamiento esperado)
+- [x] Fix real encontrado en el primer `apply`: los 5 Lambdas fallaban en cold start (`Runtime.ExitError` — falta `.runtimeconfig.json` en el zip). Causa: son proyectos de librería de clases (sin `Main`), y `dotnet publish` solo genera ese archivo para `OutputType=Exe` a menos que se fuerce. Se agregó `<GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>` a los 5 `.csproj` de Functions.*; re-publicado y re-aplicado, confirmado con `/health` en `200`
+- [x] **Pipeline completo probado en AWS real** (usuario de prueba creado a mano en Cognito vía `admin-create-user`/`admin-initiate-auth`, no vía frontend): `POST /upload` → PUT a S3 → `indexer-service` dispara solo por el evento S3 → 2 chunks indexados en DynamoDB con embeddings de Gemini → `POST /query` devuelve respuesta con fuentes citadas. Dos bugs reales más encontrados y arreglados en el camino, invisibles en local:
+  - Faltaba `dynamodb:DescribeTable` en las 4 policies IAM que usan `IDynamoDBContext` (Indexer/Query/Documents/Reports) — el SDK de alto nivel lo llama internamente antes de leer/escribir, no solo `PutItem`/`Scan`/etc
+  - `gemini-2.5-flash` pasó a "no disponible para usuarios nuevos" del lado de Google — se cambió el default a `gemini-flash-latest` (alias que sigue siempre al Flash estable vigente) en `GeminiOptions.cs`, los 3 `LoadGeminiOptions()`, `infra/lambda.tf` y `template.local.yaml`
+- [ ] Reemplazar `sam build && sam deploy` por `terraform init && terraform plan && terraform apply` en los workflows de CI/CD (Fase 13)
+- [x] **Cambios de código descubiertos al diseñar el Terraform** (necesarios para desplegar de forma segura/correcta en AWS real, no específicos de Terraform):
+  - `GEMINI_API_KEY` ya no se lee como variable de entorno plana en Indexer/Query/Reports — nuevo `SemanticSearch.Core/Options/GeminiSecretLoader.cs` la busca en SSM (`GEMINI_API_KEY_SSM_PARAM`, `WithDecryption`) y la cachea por contenedor; en local (sin esa variable) cae al `GEMINI_API_KEY` de siempre, no rompe Fase 12
+  - Guard de una línea en `IndexerFunction.ProcessRecordAsync`: ignora eventos S3 sobre keys que ya empiezan con `failed/` — sin esto, la notificación S3→Lambda (necesaria sobre todo el bucket `docs`, las categorías las elige el usuario) reprocesaría en loop cada objeto movido a `failed/` por un fallo previo (invisible en local porque ahí `indexer-service` se invoca a mano, nunca automático)
 
 ---
 
@@ -243,10 +258,29 @@ descarga.
 
 ## Fase 13 — CI/CD (GitHub Actions)
 
-- [ ] `.github/workflows/deploy.yml` — build, test, `sam build` + `sam deploy`
-- [ ] `.github/workflows/deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront
-- [ ] Configurar **OIDC** entre GitHub Actions y AWS (rol IAM asumible, sin access keys estáticas en secrets)
-- [ ] Configurar environments en GitHub Actions (dev / prod)
+- [x] Se eliminaron los workflows viejos de Azure (`deploy-api.yml`,
+      `deploy-functions.yml`) — referenciaban `SemanticSearch.Api`/`SemanticSearch.Functions`
+      (monolítico), sacados del `.sln` desde Fase 1/2, y Azure Container Apps/Functions
+- [x] `.github/workflows/ci.yml` — `dotnet build`/`test` de `SemanticSearch.sln` en cada
+      push/PR de cualquier rama, sin credenciales AWS (no las necesita)
+- [x] `.github/workflows/deploy.yml` — en push a `main`: job `build-and-plan` (build,
+      test, `infra/scripts/build-lambdas.ps1` vía `shell: pwsh`, `terraform plan`) +
+      job `apply` que corre `terraform apply` gateado por el Environment `production`
+      de GitHub (aprobación manual, ver `docs/terraform-setup.md#6`). Reemplaza al
+      `sam build && sam deploy` original (ya migrado a Terraform en Fase 10)
+- [ ] `deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront (pendiente de que el frontend integre login de Cognito, Fase 6/7)
+- [x] Configurar **OIDC** entre GitHub Actions y AWS — `infra/oidc.tf`:
+      `aws_iam_openid_connect_provider` + rol `semantic-search-github-actions-deploy`
+      con trust policy limitada a `repo:susgleik/semantic-research:ref:refs/heads/main`
+      (ni PRs ni otras ramas pueden asumirlo); aplicado en AWS real
+      (`github_actions_role_arn` en outputs)
+- [x] Configurar environments en GitHub Actions — `production` con reviewer requerido
+      antes del `apply` (setup manual documentado, no se puede hacer con Terraform);
+      no se armó un environment `dev` separado porque no hay una segunda cuenta/stack
+      AWS de desarrollo en este proyecto académico
+- [ ] Setup manual pendiente del lado del usuario en la UI de GitHub (documentado en
+      `docs/terraform-setup.md#6`): variable `AWS_DEPLOY_ROLE_ARN` + Environment
+      `production` con required reviewer
 
 ---
 
