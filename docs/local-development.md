@@ -117,15 +117,20 @@ aws --endpoint-url=http://localhost:8000 dynamodb list-tables
 
 ### `template.local.yaml`
 
-Vive en la raíz del repo. Define los 4 Lambdas HTTP (`UploadFunction`,
-`QueryFunction`, `DocumentsFunction`) con sus rutas, más `IndexerFunction` sin ruta
+Vive en la raíz del repo. Define los Lambdas HTTP (`UploadFunction`, `QueryFunction`,
+`DocumentsFunction`, `ReportsFunction`) con sus rutas, más `IndexerFunction` sin ruta
 HTTP (se invoca a mano, ver más abajo). Las variables de entorno no-secretas
 (región, endpoints de LocalStack/DynamoDB Local, nombres de bucket/tabla, modelos de
 Gemini) están en `Globals.Function.Environment.Variables`.
 
 `GEMINI_API_KEY` está declarada ahí con valor vacío (`""`) a propósito — es un
-placeholder necesario (ver gotcha en la sección 6) para que `--env-vars` pueda
+placeholder necesario (ver gotcha en la sección 7) para que `--env-vars` pueda
 sobrescribirla con el valor real.
+
+`Globals.HttpApi.CorsConfiguration` habilita CORS para que el frontend (Vite,
+`localhost:5173`) pueda llamar a la API — ver la sección 8 para el resto de lo que
+hace falta para que el frontend funcione contra este entorno (no alcanza solo con
+esto).
 
 ### `env.local.json` (no se commitea)
 
@@ -293,6 +298,86 @@ El converter por defecto del SDK de .NET para `List<float>` mapea a **Number Set
 de embedding silenciosamente. **Solución:** `FloatListConverter : IPropertyConverter`
 + `[DynamoDBProperty(typeof(FloatListConverter))]` en `ChunkRecord.Embedding` para
 forzar el tipo `List (L)`. Ver `src/SemanticSearch.Core/Models/FloatListConverter.cs`.
+
+### DynamoDB Local / LocalStack pierden todo al reiniciar Docker Desktop
+`dynamodb-local` corre con `-inMemory` (sin persistencia real, ver arriba). LocalStack
+tiene `PERSISTENCE: 1` + volumen nombrado, pero en la práctica un `docker compose down`
+sin `-v`, un reinicio de Docker Desktop o del daemon igual puede dejarlo vacío. Síntoma:
+`GET /documents` devuelve 500 con `Amazon.DynamoDBv2.Model.ResourceNotFoundException:
+Cannot do operations on a non-existent table`, o el bucket `docs` aparece vacío aunque
+antes tenía objetos. **Solución:** correr `docker compose up setup` (es idempotente, no
+hace daño de más) cada vez que se reinicia el stack de Docker, antes de asumir que hay
+un bug de código.
+
+### El frontend sube el archivo pero nunca llega a S3 (sin error visible en `sam local`)
+Encontrado al integrar el frontend (Fase 7) con `upload-service`/`report-service`.
+Son **tres problemas apilados**, cada uno enmascarando al siguiente — `curl` no los
+sufre (por eso el flujo de la sección 6 con `--resolve`/`-k` siempre funcionó), pero
+el navegador sí:
+
+1. **Host `localstack` no resuelve fuera de la red Docker.** El navegador corre en el
+   host, no dentro de `semantic-search-net`. **Solución:** variable de entorno nueva
+   `S3_PUBLIC_SERVICE_URL: http://localhost:4566`, usada *solo* para el cliente S3 que
+   genera URLs prefirmadas (`upload-service` completo, y el cliente de presign
+   separado en `report-service`) — el resto de las llamadas S3 reales (Indexer,
+   Documents, el `PutObject`/`GetObjectMetadata` de Reports) siguen usando
+   `S3_SERVICE_URL: http://localstack:4566` porque esas sí corren dentro de Docker.
+2. **El SDK firma `https://` aunque el endpoint sea `http://`.** `AmazonS3Config.UseHttp`
+   **no tiene efecto** sobre el esquema de una URL prefirmada en este SDK (se probó
+   explícitamente) — el navegador no puede saltarse ese mismatch de protocolo como sí
+   hace `curl -k`. **Solución real:** setear `Protocol = Protocol.HTTP` directo en el
+   `GetPreSignedUrlRequest` (namespace `Amazon`), condicionado a si se está corriendo
+   contra un endpoint local. Ver `S3UploadService.cs` y `ReportStorageService.cs`.
+3. **Falta CORS en el bucket S3.** Un `PUT`/`GET` desde el navegador a una URL
+   prefirmada de S3 dispara preflight `OPTIONS` igual que cualquier otro request
+   cross-origin — esto es CORS *del bucket*, independiente del CORS de API Gateway
+   (`Globals.HttpApi.CorsConfiguration` en el template). Sin una política CORS en el
+   bucket, el navegador bloquea el `PUT` **silenciosamente antes de mandarlo**: no
+   aparece ningún log ni en `sam local start-api` ni en LocalStack, lo que lo hace
+   parecer un problema de backend cuando no lo es. **Solución:** `aws s3api
+   put-bucket-cors` sobre `docs` y `reports` en el contenedor `setup` de
+   `docker-compose.yml`, permitiendo el origen `http://localhost:5173`.
+
+**Cómo diagnosticar esto en el futuro:** si `POST /upload` devuelve 200 pero el
+archivo no aparece en `/documents` tras indexarlo, primero confirmar si el objeto
+llegó a S3 (`aws --endpoint-url=http://localhost:4566 s3api list-objects-v2 --bucket
+docs`) antes de sospechar del código del indexer — si no está en S3, el problema es
+la subida (esta sección), no la indexación.
+
+---
+
+## 8. Frontend (React SPA) contra el entorno local
+
+El frontend (`frontend/`, Fase 7 del `TODO.md`) es un Vite dev server aparte —
+requiere su propia terminal, además de `docker compose up -d` y `sam local start-api`.
+
+```powershell
+cd frontend
+npm run dev
+# http://localhost:5173
+```
+
+Puntos a tener en cuenta:
+
+- **Puerto fijo (`5173`).** `vite.config.ts` tiene `server.port = 5173` +
+  `strictPort: true` a propósito: si Vite saltara a otro puerto (5174, 5175...) por
+  tenerlo ocupado, dejaría de matchear el origen autorizado en
+  `Globals.HttpApi.CorsConfiguration` de `template.local.yaml` y todo fallaría con
+  errores de CORS. Si `npm run dev` falla con "Port 5173 is already in use", hay un
+  proceso zombie — en Windows, matar el proceso `npm run dev`/`vite` a veces no mata
+  el proceso `node` hijo real; buscar quién ocupa el puerto con
+  `Get-NetTCPConnection -LocalPort 5173 | Select OwningProcess` y matarlo con
+  `Stop-Process -Id <pid> -Force`.
+- **`.env`** (gitignored, copiar de `.env.example`): solo necesita `VITE_API_URL`
+  apuntando a `http://127.0.0.1:3000` (donde escucha `sam local start-api`).
+- **El indexado sigue siendo manual.** Subir un archivo desde la UI (drag & drop en
+  la vista "Subir documento") deja el objeto en S3 igual que con `curl`, pero
+  `IndexerFunction` no se dispara solo — hay que invocarlo a mano con
+  `sam local invoke IndexerFunction` (sección 4), usando el `docId`/key que muestra
+  la respuesta del upload en la UI, antes de que el documento aparezca en la vista
+  "Documentos" o sea buscable en "Buscar".
+- Ver la sección 7 ("El frontend sube el archivo pero nunca llega a S3") si el upload
+  parece exitoso en la UI pero el archivo no aparece en S3.
 
 ---
 

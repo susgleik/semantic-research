@@ -61,6 +61,13 @@ services:
         until aws --endpoint-url=http://dynamodb-local:8000 dynamodb list-tables >/dev/null 2>&1; do sleep 1; done
         aws --endpoint-url=http://localstack:4566 s3 mb s3://docs || true
         aws --endpoint-url=http://localstack:4566 s3 mb s3://reports || true
+        # CORS del bucket (no confundir con el CORS de HttpApi en template.local.yaml):
+        # un PUT a una URL prefirmada de S3 hecho desde el navegador dispara preflight
+        # OPTIONS igual que cualquier otro cross-origin request. Sin esto, el navegador
+        # bloquea el PUT antes de mandarlo (curl no lo sufre, por eso "funciona" con curl
+        # y falla silenciosamente desde el frontend).
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-cors --bucket docs --cors-configuration '{"CORSRules":[{"AllowedOrigins":["http://localhost:5173","http://127.0.0.1:5173"],"AllowedMethods":["GET","PUT","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"]}]}'
+        aws --endpoint-url=http://localstack:4566 s3api put-bucket-cors --bucket reports --cors-configuration '{"CORSRules":[{"AllowedOrigins":["http://localhost:5173","http://127.0.0.1:5173"],"AllowedMethods":["GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["ETag"]}]}'
         aws --endpoint-url=http://dynamodb-local:8000 dynamodb create-table \
           --table-name chunks \
           --attribute-definitions AttributeName=DocumentId,AttributeType=S AttributeName=ChunkId,AttributeType=S \

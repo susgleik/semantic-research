@@ -75,7 +75,12 @@ public class UploadFunction
     {
         BucketName = Environment.GetEnvironmentVariable("S3_BUCKET_DOCS") ?? "docs",
         Region     = Environment.GetEnvironmentVariable("AWS_REGION") ?? "us-east-1",
-        ServiceUrl = Environment.GetEnvironmentVariable("S3_SERVICE_URL") // solo en local (LocalStack)
+        // La URL prefirmada la consume el navegador, no este Lambda (nunca llama a S3
+        // de verdad, solo firma). "S3_SERVICE_URL" (http://localstack:4566) solo resuelve
+        // dentro de --docker-network; "S3_PUBLIC_SERVICE_URL" es el host alcanzable desde
+        // fuera de la red Docker (http://localhost:4566). En AWS real ninguna de las dos existe.
+        ServiceUrl = Environment.GetEnvironmentVariable("S3_PUBLIC_SERVICE_URL")
+                     ?? Environment.GetEnvironmentVariable("S3_SERVICE_URL")
     };
 
     private static IS3UploadService BuildS3UploadService(S3Options options)

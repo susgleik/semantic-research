@@ -1,3 +1,4 @@
+using Amazon;
 using Amazon.S3;
 using Amazon.S3.Model;
 using SemanticSearch.Core.Options;
@@ -19,7 +20,11 @@ public class S3UploadService(IAmazonS3 s3Client, S3Options options) : IS3UploadS
             Key         = objectKey,
             Verb        = HttpVerb.PUT,
             Expires     = DateTime.UtcNow.Add(UploadUrlTtl),
-            ContentType = contentType
+            ContentType = contentType,
+            // AmazonS3Config.UseHttp no afecta el esquema de las URLs prefirmadas en este SDK
+            // (queda ignorado); hay que forzarlo acá. Solo en local (LocalStack habla HTTP
+            // plano) — en AWS real (options.ServiceUrl null) se deja el default (HTTPS).
+            Protocol = string.IsNullOrEmpty(options.ServiceUrl) ? Protocol.HTTPS : Protocol.HTTP
         };
 
         var url = await s3Client.GetPreSignedURLAsync(request);
