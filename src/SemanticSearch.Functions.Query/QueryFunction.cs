@@ -90,9 +90,9 @@ public class QueryFunction
 
     private static GeminiOptions LoadGeminiOptions() => new()
     {
-        ApiKey              = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "",
+        ApiKey              = GeminiSecretLoader.ApiKey,
         EmbeddingModel      = Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_MODEL") ?? "gemini-embedding-001",
-        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-2.5-flash",
+        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-flash-latest",
         EmbeddingDimensions = int.TryParse(Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_DIMENSIONS"), out var d) ? d : 768
     };
 

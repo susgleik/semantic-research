@@ -24,7 +24,7 @@ Globals:
         DYNAMODB_TABLE_NAME: chunks
         DYNAMODB_SERVICE_URL: http://dynamodb-local:8000
         GEMINI_EMBEDDING_MODEL: gemini-embedding-001
-        GEMINI_CHAT_MODEL: gemini-2.5-flash
+        GEMINI_CHAT_MODEL: gemini-flash-latest
         GEMINI_EMBEDDING_DIMENSIONS: "768"
         # Placeholder vacío: el valor real lo inyecta env.local.json vía --env-vars
         # (--env-vars solo sobrescribe variables que ya existen en el template).

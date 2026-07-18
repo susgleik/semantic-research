@@ -60,6 +60,12 @@ public class IndexerFunction
         var bucket = record.S3.Bucket.Name;
         var key    = Uri.UnescapeDataString(record.S3.Object.Key);
 
+        if (key.StartsWith("failed/", StringComparison.Ordinal))
+        {
+            context.Logger.LogInformation($"Ignorando evento sobre objeto ya movido a failed/: {key}");
+            return;
+        }
+
         try
         {
             if (record.S3.Object.Size > MaxFileSizeBytes)
@@ -130,9 +136,9 @@ public class IndexerFunction
 
     private static GeminiOptions LoadGeminiOptions() => new()
     {
-        ApiKey              = Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "",
+        ApiKey              = GeminiSecretLoader.ApiKey,
         EmbeddingModel      = Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_MODEL") ?? "gemini-embedding-001",
-        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-2.5-flash",
+        ChatModel           = Environment.GetEnvironmentVariable("GEMINI_CHAT_MODEL") ?? "gemini-flash-latest",
         EmbeddingDimensions = int.TryParse(Environment.GetEnvironmentVariable("GEMINI_EMBEDDING_DIMENSIONS"), out var d) ? d : 768
     };
 
