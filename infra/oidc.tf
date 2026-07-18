@@ -106,6 +106,27 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
         Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
         Resource = "arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/semantic-search-tfstate-lock"
       },
+      {
+        # Terraform necesita leer/gestionar el propio recurso OIDC provider
+        # (aws_iam_openid_connect_provider.github_actions) en cada plan/apply.
+        Sid    = "OidcProviderManagement"
+        Effect = "Allow"
+        Action = [
+          "iam:GetOpenIDConnectProvider",
+          "iam:CreateOpenIDConnectProvider",
+          "iam:DeleteOpenIDConnectProvider",
+          "iam:UpdateOpenIDConnectProviderThumbprint",
+          "iam:TagOpenIDConnectProvider",
+          "iam:UntagOpenIDConnectProvider",
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+      },
+      {
+        Sid      = "OidcProviderList"
+        Effect   = "Allow"
+        Action   = ["iam:ListOpenIDConnectProviders"]
+        Resource = "*"
+      },
     ]
   })
 }
