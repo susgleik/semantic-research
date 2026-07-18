@@ -1,55 +1,98 @@
 # Proyecto F — Sistema de Búsqueda Semántica RAG
-## Blueprint completo en C# / .NET 8
+## Blueprint completo en C# / .NET 8 sobre AWS (serverless + microservicios)
 
-**Stack:** ASP.NET Core 10 · Azure Functions v4 (isolated worker) · Azure AI Search · Azure OpenAI · Blob Storage · Container Apps
+**Stack:** AWS Lambda (.NET 8) · API Gateway (HTTP API) · S3 · DynamoDB ·
+Amazon Bedrock · Amazon Cognito · CloudFront · React (Vite) · AWS SAM
+
+> Versión migrada desde Azure. La versión anterior (ASP.NET Core en Container Apps +
+> Azure AI Search + Azure OpenAI) queda documentada al final de este archivo como
+> referencia histórica.
+
+---
+
+## Por qué esta arquitectura
+
+El requisito de la materia es aplicar cómputo en la nube con **serverless y/o
+microservicios**. La cuenta de AWS usada es **nueva (2026)**, por lo que aplica el
+esquema de Free Tier vigente: $100-200 de crédito durante 6 meses + un set de
+servicios **Always Free** permanentes (sin importar antigüedad de la cuenta):
+Lambda, DynamoDB, Cognito, CloudWatch, Step Functions, CloudFront.
+
+El diseño se apoya deliberadamente en esos servicios Always Free para que el costo
+de infraestructura sea **$0 de forma permanente**. El único costo real es Amazon
+Bedrock (embeddings + LLM), que no tiene free tier pero cuesta centavos en el
+volumen de uso de un proyecto académico.
+
+**Decisión clave — no hay vector DB gestionada gratis en AWS:**
+- OpenSearch (Service o Serverless) no tiene free tier real y puede costar
+  $700+/mes si no se administra con cuidado por los OCUs mínimos.
+- RDS + pgvector tiene free tier pero solo 12 meses, y es una instancia siempre
+  prendida — rompe el modelo serverless.
+- **Elegido: DynamoDB** (Always Free, 25GB) para guardar los chunks con su
+  embedding, y la búsqueda de similitud (coseno) se calcula en memoria dentro del
+  Lambda de query. Es la elección correcta para un corpus académico (decenas/
+  cientos de documentos); no escalaría a millones de chunks en producción.
+
+**Decisión clave — Lambdas separados por responsabilidad, no un monolito:**
+en vez de un solo Lambda con ASP.NET Core sirviendo todos los endpoints, cada
+operación (`upload`, `indexer`, `query`, `documents`) es su propia función Lambda,
+desplegable y escalable de forma independiente. Esto es lo que cumple el requisito
+de "microservicios": acoplamiento mínimo entre piezas, cada una con un solo motivo
+para cambiar.
 
 ---
 
 ## Arquitectura general
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        PIPELINE A — Ingesta                      │
-│                                                                   │
-│  Cliente ──POST /upload──► ASP.NET Core API ──► Blob Storage     │
-│                                                       │           │
-│                                              blob trigger         │
-│                                                       ▼           │
-│                                            Azure Function         │
-│                                            (indexer)             │
-│                                                 │                 │
-│                             ┌───────────────────┤                 │
-│                             ▼                   ▼                 │
-│                       Azure OpenAI        Azure AI Search         │
-│                       (embeddings)        (vector index)          │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          PIPELINE A — Ingesta                              │
+│                                                                             │
+│  Cliente ──POST /upload──► API Gateway ──► Lambda (upload-service)         │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                                  S3 (bucket docs)           │
+│                                                       │                     │
+│                                          S3 Event Notification              │
+│                                                       ▼                     │
+│                                          Lambda (indexer-service)           │
+│                                                       │                     │
+│                             ┌─────────────────────────┤                    │
+│                             ▼                         ▼                    │
+│                      Amazon Bedrock              DynamoDB                  │
+│                      (Titan Embed v2)        (tabla "chunks")              │
+└───────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────────┐
-│                        PIPELINE B — Query RAG                    │
-│                                                                   │
-│  Cliente ──POST /query──► ASP.NET Core API                       │
-│                                    │                              │
-│                           embed query text                        │
-│                                    │                              │
-│                                    ▼                              │
-│                             Azure OpenAI                          │
-│                             (embeddings)                          │
-│                                    │                              │
-│                           hybrid search                           │
-│                                    │                              │
-│                                    ▼                              │
-│                            Azure AI Search                        │
-│                            (top-K chunks)                         │
-│                                    │                              │
-│                           build RAG prompt                        │
-│                                    │                              │
-│                                    ▼                              │
-│                             Azure OpenAI                          │
-│                             (GPT-4o completions)                  │
-│                                    │                              │
-│                                    ▼                              │
-│  Cliente ◄── { answer, sources } ──┘                             │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          PIPELINE B — Query RAG                            │
+│                                                                             │
+│  Cliente ──POST /query──► API Gateway ──► Lambda (query-service)           │
+│                                                       │                     │
+│                                              embed query text               │
+│                                                       ▼                     │
+│                                                Amazon Bedrock               │
+│                                                (Titan Embed v2)             │
+│                                                       │                     │
+│                                          similitud coseno en memoria        │
+│                                                       ▼                     │
+│                                                  DynamoDB                   │
+│                                                (top-K chunks)               │
+│                                                       │                     │
+│                                              build RAG prompt                │
+│                                                       ▼                     │
+│                                                Amazon Bedrock               │
+│                                                (Claude Haiku)               │
+│                                                       │                     │
+│  Cliente ◄── { answer, sources } ────────────────────┘                     │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          FRONTEND                                          │
+│                                                                             │
+│  Navegador ──► CloudFront ──► S3 (bucket frontend, React build estático)   │
+│      │                                                                     │
+│      └── fetch/axios ──► API Gateway (JWT de Cognito) ──► Lambdas          │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -61,67 +104,45 @@ semantic-search/
 │
 ├── src/
 │   │
-│   ├── SemanticSearch.Api/                   # ASP.NET Core 8 — Container Apps
-│   │   ├── SemanticSearch.Api.csproj
-│   │   ├── Program.cs                        # Minimal API entrypoint + DI setup
-│   │   ├── appsettings.json
-│   │   ├── appsettings.Development.json
-│   │   │
-│   │   ├── Endpoints/                        # Minimal API endpoints
-│   │   │   ├── UploadEndpoints.cs            # POST /upload
-│   │   │   ├── QueryEndpoints.cs             # POST /query
-│   │   │   ├── DocumentEndpoints.cs          # GET  /documents, POST /reindex/:id
-│   │   │   └── HealthEndpoints.cs            # GET  /health
-│   │   │
-│   │   ├── Services/
-│   │   │   ├── IRagService.cs
-│   │   │   ├── RagService.cs                 # Orquesta embed + search + completions
-│   │   │   ├── IEmbeddingService.cs
-│   │   │   ├── EmbeddingService.cs           # Azure OpenAI embeddings
-│   │   │   ├── ISearchService.cs
-│   │   │   ├── SearchService.cs              # Azure AI Search client
-│   │   │   ├── IBlobService.cs
-│   │   │   └── BlobService.cs                # Azure Blob Storage client
-│   │   │
-│   │   ├── Models/
-│   │   │   ├── QueryRequest.cs
-│   │   │   ├── QueryResponse.cs
-│   │   │   ├── UploadRequest.cs
-│   │   │   ├── UploadResponse.cs
-│   │   │   ├── SourceChunk.cs
-│   │   │   └── DocumentRecord.cs
-│   │   │
-│   │   ├── Middleware/
-│   │   │   ├── AuthMiddleware.cs             # Validación Azure AD JWT
-│   │   │   └── ExceptionMiddleware.cs        # Manejo centralizado de errores
-│   │   │
-│   │   └── Dockerfile
-│   │
-│   ├── SemanticSearch.Functions/             # Azure Functions v4 — blob indexer
-│   │   ├── SemanticSearch.Functions.csproj
-│   │   ├── Program.cs                        # Isolated worker host setup
-│   │   ├── host.json
-│   │   ├── local.settings.json
-│   │   │
-│   │   ├── Functions/
-│   │   │   └── DocumentIndexer.cs            # Blob trigger → chunk → embed → index
-│   │   │
-│   │   └── Services/
-│   │       ├── ChunkerService.cs             # Sliding window con overlap
-│   │       ├── EmbeddingService.cs           # Reutiliza lógica de embeddings
-│   │       └── SearchIndexerService.cs       # Escribe chunks en AI Search
-│   │
-│   ├── SemanticSearch.Core/                  # Shared library — modelos y contratos
+│   ├── SemanticSearch.Core/                       # Shared library — modelos y contratos
 │   │   ├── SemanticSearch.Core.csproj
 │   │   ├── Models/
 │   │   │   ├── DocumentChunk.cs
-│   │   │   └── IndexedDocument.cs
+│   │   │   ├── IndexedDocument.cs
+│   │   │   └── ChunkRecord.cs                      # item de DynamoDB
 │   │   └── Options/
-│   │       ├── OpenAIOptions.cs
-│   │       ├── SearchOptions.cs
-│   │       └── BlobOptions.cs
+│   │       ├── BedrockOptions.cs
+│   │       ├── DynamoDbOptions.cs
+│   │       └── S3Options.cs
 │   │
-│   └── SemanticSearch.McpServer/             # Servidor MCP para agente @doc-search
+│   ├── SemanticSearch.Functions.Upload/            # Lambda: POST /upload
+│   │   ├── SemanticSearch.Functions.Upload.csproj
+│   │   ├── UploadFunction.cs
+│   │   └── Services/
+│   │       └── S3UploadService.cs
+│   │
+│   ├── SemanticSearch.Functions.Indexer/           # Lambda: trigger S3
+│   │   ├── SemanticSearch.Functions.Indexer.csproj
+│   │   ├── IndexerFunction.cs
+│   │   └── Services/
+│   │       ├── ChunkerService.cs                   # sliding window con overlap
+│   │       ├── BedrockEmbeddingService.cs
+│   │       └── DynamoChunkWriter.cs
+│   │
+│   ├── SemanticSearch.Functions.Query/             # Lambda: POST /query
+│   │   ├── SemanticSearch.Functions.Query.csproj
+│   │   ├── QueryFunction.cs
+│   │   └── Services/
+│   │       ├── SimilaritySearchService.cs
+│   │       └── RagAnswerService.cs
+│   │
+│   ├── SemanticSearch.Functions.Documents/         # Lambda: GET /documents, /reindex, /health
+│   │   ├── SemanticSearch.Functions.Documents.csproj
+│   │   ├── DocumentsFunction.cs
+│   │   └── Services/
+│   │       └── DocumentRegistryService.cs
+│   │
+│   └── SemanticSearch.McpServer/                   # Servidor MCP para agente @doc-search
 │       ├── SemanticSearch.McpServer.csproj
 │       ├── Program.cs
 │       └── Tools/
@@ -129,499 +150,272 @@ semantic-search/
 │           ├── ListDocumentsTool.cs
 │           └── ReindexDocumentTool.cs
 │
-├── tests/
-│   ├── SemanticSearch.Api.Tests/
-│   │   ├── Endpoints/
-│   │   │   ├── QueryEndpointsTests.cs
-│   │   │   └── UploadEndpointsTests.cs
-│   │   └── Services/
-│   │       └── RagServiceTests.cs
-│   └── SemanticSearch.Functions.Tests/
-│       └── DocumentIndexerTests.cs
+├── frontend/                                       # React SPA (Vite + TypeScript)
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+│       ├── api/client.ts
+│       ├── pages/
+│       │   ├── UploadPage.tsx
+│       │   ├── DocumentsPage.tsx
+│       │   └── QueryPage.tsx
+│       └── App.tsx
 │
-├── infra/                                    # Infrastructure as Code (Bicep)
-│   ├── main.bicep
-│   ├── blob.bicep
-│   ├── search.bicep
-│   ├── openai.bicep
-│   └── container-app.bicep
+├── tests/
+│   ├── SemanticSearch.Functions.Indexer.Tests/
+│   │   └── ChunkerServiceTests.cs
+│   └── SemanticSearch.Functions.Query.Tests/
+│       └── SimilaritySearchServiceTests.cs
+│
+├── infra/                                          # Infrastructure as Code (AWS SAM)
+│   ├── template.yaml
+│   └── samconfig.toml
 │
 ├── .github/
-│   ├── workflows/
-│   │   ├── deploy-api.yml
-│   │   └── deploy-functions.yml
-│   └── copilot-instructions.md
+│   └── workflows/
+│       ├── deploy.yml
+│       └── deploy-frontend.yml
 │
-└── SemanticSearch.sln                        # Solution file — agrupa todos los proyectos
+└── SemanticSearch.sln
 ```
 
 ---
 
-## NuGet packages por proyecto
+## DynamoDB — diseño de la tabla `chunks`
 
-### SemanticSearch.Api.csproj
+| Atributo | Tipo | Rol |
+|---|---|---|
+| `documentId` | String | Partition Key |
+| `chunkId` | String | Sort Key |
+| `text` | String | texto del chunk |
+| `embedding` | List\<Number\> | vector de embedding (Titan = 1024 dims) |
+| `filename` | String | nombre original del documento |
+| `page` | Number | página de origen (si aplica) |
+| `status` | String | `indexed` / `failed` |
+| `createdAt` | String (ISO 8601) | fecha de indexado |
 
-```xml
-<Project Sdk="Microsoft.NET.Sdk.Web">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+La tabla `documents` (metadata, separada o como ítems con `chunkId = "META"`)
+guarda el registro por documento: `documentId`, `filename`, `status`, `chunkCount`,
+`uploadedAt`.
 
-  <ItemGroup>
-    <!-- Azure OpenAI -->
-    <PackageReference Include="Azure.AI.OpenAI" Version="2.*" />
-
-    <!-- Azure AI Search -->
-    <PackageReference Include="Azure.Search.Documents" Version="11.*" />
-
-    <!-- Azure Blob Storage -->
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.*" />
-
-    <!-- Azure AD auth -->
-    <PackageReference Include="Microsoft.Identity.Web" Version="2.*" />
-
-    <!-- Options pattern + validation -->
-    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="8.*" />
-
-    <!-- Shared models -->
-    <ProjectReference Include="../SemanticSearch.Core/SemanticSearch.Core.csproj" />
-  </ItemGroup>
-</Project>
-```
-
-### SemanticSearch.Functions.csproj
-
-```xml
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <AzureFunctionsVersion>v4</AzureFunctionsVersion>
-    <OutputType>Exe</OutputType>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="1.*" />
-    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Blobs" Version="6.*" />
-    <PackageReference Include="Azure.AI.OpenAI" Version="2.*" />
-    <PackageReference Include="Azure.Search.Documents" Version="11.*" />
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.*" />
-    <ProjectReference Include="../SemanticSearch.Core/SemanticSearch.Core.csproj" />
-  </ItemGroup>
-</Project>
-```
+> Nota de escala: para un corpus académico, un `Scan` completo de la tabla +
+> similitud coseno en memoria dentro del Lambda es rápido y simple. Si el corpus
+> creciera mucho, el siguiente paso sería paginar el scan o particionar por
+> categoría/documento antes de comparar vectores.
 
 ---
 
 ## Código clave
 
-### Program.cs — ASP.NET Core 8 (Minimal API)
+### `IndexerFunction.cs` — Lambda disparado por evento S3
 
 ```csharp
-using Azure;
-using Azure.AI.OpenAI;
-using Azure.Search.Documents;
-using Azure.Storage.Blobs;
-using Microsoft.Identity.Web;
-using SemanticSearch.Api.Middleware;
-using SemanticSearch.Api.Services;
-using SemanticSearch.Core.Options;
-
-var builder = WebApplication.CreateBuilder(args);
-
-// ── Options (strongly-typed, validados al arrancar) ──────────────────────────
-builder.Services
-    .AddOptions<OpenAIOptions>()
-    .BindConfiguration("AzureOpenAI")
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services
-    .AddOptions<SearchOptions>()
-    .BindConfiguration("AzureSearch")
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services
-    .AddOptions<BlobOptions>()
-    .BindConfiguration("AzureBlob")
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-// ── Azure clients (singleton — reusan connection pool) ───────────────────────
-builder.Services.AddSingleton(sp =>
+public class IndexerFunction
 {
-    var opts = sp.GetRequiredService<IOptions<OpenAIOptions>>().Value;
-    return new AzureOpenAIClient(new Uri(opts.Endpoint), new AzureKeyCredential(opts.ApiKey));
-});
+    private readonly ChunkerService _chunker;
+    private readonly BedrockEmbeddingService _embeddings;
+    private readonly DynamoChunkWriter _writer;
+    private readonly IAmazonS3 _s3;
+    private readonly ILambdaLogger _logger;
 
-builder.Services.AddSingleton(sp =>
-{
-    var opts = sp.GetRequiredService<IOptions<SearchOptions>>().Value;
-    return new SearchClient(new Uri(opts.Endpoint), opts.IndexName, new AzureKeyCredential(opts.ApiKey));
-});
-
-builder.Services.AddSingleton(sp =>
-{
-    var opts = sp.GetRequiredService<IOptions<BlobOptions>>().Value;
-    return new BlobServiceClient(opts.ConnectionString);
-});
-
-// ── Servicios de dominio ──────────────────────────────────────────────────────
-builder.Services.AddScoped<IEmbeddingService, EmbeddingService>();
-builder.Services.AddScoped<ISearchService, SearchService>();
-builder.Services.AddScoped<IBlobService, BlobService>();
-builder.Services.AddScoped<IRagService, RagService>();
-
-// ── Auth Azure AD ─────────────────────────────────────────────────────────────
-builder.Services.AddMicrosoftIdentityWebApiAuthentication(builder.Configuration);
-builder.Services.AddAuthorization();
-
-// ── Logging estructurado ──────────────────────────────────────────────────────
-builder.Logging.AddConsole();
-
-var app = builder.Build();
-
-app.UseMiddleware<ExceptionMiddleware>();
-app.UseAuthentication();
-app.UseAuthorization();
-
-// ── Endpoints ─────────────────────────────────────────────────────────────────
-app.MapUploadEndpoints();
-app.MapQueryEndpoints();
-app.MapDocumentEndpoints();
-app.MapHealthEndpoints();
-
-app.Run();
-```
-
----
-
-### Models — request y response
-
-```csharp
-// Models/QueryRequest.cs
-public record QueryRequest(
-    [Required] string Query,
-    int TopK = 5,
-    string? Filter = null,
-    string Language = "es"
-);
-
-// Models/QueryResponse.cs
-public record QueryResponse(
-    string Answer,
-    IReadOnlyList<SourceChunk> Sources
-);
-
-// Models/SourceChunk.cs
-public record SourceChunk(
-    string DocId,
-    string Filename,
-    string Chunk,
-    double Score,
-    int Page
-);
-
-// Models/UploadResponse.cs
-public record UploadResponse(
-    string DocId,
-    string Filename,
-    string Status,
-    string BlobUrl
-);
-```
-
----
-
-### RagService.cs — orquestador principal
-
-```csharp
-public class RagService(
-    IEmbeddingService embeddings,
-    ISearchService search,
-    AzureOpenAIClient openAiClient,
-    IOptions<OpenAIOptions> opts,
-    ILogger<RagService> logger) : IRagService
-{
-    private readonly string _chatDeployment = opts.Value.ChatDeployment;
-
-    public async Task<QueryResponse> QueryAsync(QueryRequest request, CancellationToken ct = default)
+    public IndexerFunction()
     {
-        // 1. Embed la pregunta del usuario
-        logger.LogInformation("Generating embedding for query");
-        var queryVector = await embeddings.EmbedAsync(request.Query, ct);
-
-        // 2. Búsqueda híbrida: vector + keyword
-        logger.LogInformation("Running hybrid search, top_k={TopK}", request.TopK);
-        var chunks = await search.HybridSearchAsync(request.Query, queryVector, request.TopK, request.Filter, ct);
-
-        // 3. Construir prompt RAG con el contexto recuperado
-        var ragPrompt = BuildRagPrompt(request.Query, chunks);
-
-        // 4. Completions con GPT-4o
-        logger.LogInformation("Calling GPT-4o completions");
-        var chatClient = openAiClient.GetChatClient(_chatDeployment);
-
-        var completion = await chatClient.CompleteChatAsync(
-            [
-                new SystemChatMessage("""
-                    Sos un asistente que responde preguntas basándose exclusivamente
-                    en los fragmentos de documentos provistos. Si la respuesta no está
-                    en los fragmentos, indicalo claramente. Respondé en el mismo idioma
-                    que la pregunta.
-                    """),
-                new UserChatMessage(ragPrompt)
-            ],
-            new ChatCompletionOptions { Temperature = 0.1f, MaxOutputTokenCount = 1500 },
-            ct
-        );
-
-        var answer = completion.Value.Content[0].Text;
-        return new QueryResponse(answer, chunks);
+        // Sin contenedor de DI de ASP.NET Core — se arma a mano
+        _s3 = new AmazonS3Client();
+        _chunker = new ChunkerService();
+        _embeddings = new BedrockEmbeddingService(new AmazonBedrockRuntimeClient());
+        _writer = new DynamoChunkWriter(new AmazonDynamoDBClient());
     }
 
-    private static string BuildRagPrompt(string query, IReadOnlyList<SourceChunk> chunks)
+    public async Task FunctionHandler(S3Event s3Event, ILambdaContext context)
     {
-        var context = string.Join("\n\n", chunks.Select((c, i) =>
-            $"[Fragmento {i + 1} — {c.Filename}, página {c.Page}]\n{c.Chunk}"));
+        foreach (var record in s3Event.Records)
+        {
+            var bucket = record.S3.Bucket.Name;
+            var key = record.S3.Object.Key;
+            context.Logger.LogInformation($"Indexing {bucket}/{key}");
 
-        return $"""
-            Pregunta: {query}
+            try
+            {
+                var obj = await _s3.GetObjectAsync(bucket, key);
+                var text = await ExtractTextAsync(obj.ResponseStream, key);
 
-            Fragmentos de documentos relevantes:
-            {context}
+                var chunks = _chunker.SlidingWindow(text, windowSize: 512, overlap: 64);
+                var vectors = await _embeddings.EmbedBatchAsync(chunks.Select(c => c.Text));
 
-            Respondé la pregunta basándote en los fragmentos anteriores.
-            """;
+                var documentId = Path.GetFileNameWithoutExtension(key);
+                await _writer.WriteChunksAsync(documentId, key, chunks, vectors);
+
+                context.Logger.LogInformation($"Indexed {chunks.Count} chunks for {key}");
+            }
+            catch (Exception ex)
+            {
+                context.Logger.LogError($"Failed to index {key}: {ex.Message}");
+                // mover el objeto a un prefijo failed/ en vez de usar una DLQ gestionada
+                await _s3.CopyObjectAsync(bucket, key, bucket, $"failed/{key}");
+            }
+        }
     }
+
+    private static async Task<string> ExtractTextAsync(Stream content, string key) =>
+        Path.GetExtension(key).ToLower() switch
+        {
+            ".txt" => await new StreamReader(content).ReadToEndAsync(),
+            ".pdf" => ExtractPdfText(content),    // PdfPig
+            ".docx" => ExtractDocxText(content),  // DocumentFormat.OpenXml
+            _ => throw new NotSupportedException($"Unsupported file type: {key}")
+        };
 }
 ```
 
----
-
-### EmbeddingService.cs
+### `BedrockEmbeddingService.cs`
 
 ```csharp
-public class EmbeddingService(
-    AzureOpenAIClient client,
-    IOptions<OpenAIOptions> opts) : IEmbeddingService
+public class BedrockEmbeddingService(IAmazonBedrockRuntime bedrock)
 {
-    private readonly EmbeddingClient _embeddingClient =
-        client.GetEmbeddingClient(opts.Value.EmbeddingDeployment);
+    private const string ModelId = "amazon.titan-embed-text-v2:0";
 
     public async Task<ReadOnlyMemory<float>> EmbedAsync(string text, CancellationToken ct = default)
     {
-        var result = await _embeddingClient.GenerateEmbeddingAsync(text, cancellationToken: ct);
-        return result.Value.ToFloats();
+        var payload = JsonSerializer.Serialize(new { inputText = text });
+        var response = await bedrock.InvokeModelAsync(new InvokeModelRequest
+        {
+            ModelId = ModelId,
+            ContentType = "application/json",
+            Body = new MemoryStream(Encoding.UTF8.GetBytes(payload))
+        }, ct);
+
+        var result = await JsonSerializer.DeserializeAsync<TitanEmbeddingResponse>(response.Body, cancellationToken: ct);
+        return result!.Embedding.ToArray();
     }
 
     public async Task<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(
         IEnumerable<string> texts, CancellationToken ct = default)
     {
-        var inputs = texts.Select(t => new EmbeddingGenerationOptions()).ToList();
-        var result = await _embeddingClient.GenerateEmbeddingsAsync(texts, cancellationToken: ct);
-        return result.Value.Select(e => e.ToFloats()).ToList();
+        // Titan Embed no soporta batch nativo — se invoca en paralelo controlado
+        var tasks = texts.Select(t => EmbedAsync(t, ct));
+        return await Task.WhenAll(tasks);
     }
+
+    private record TitanEmbeddingResponse(float[] Embedding);
 }
 ```
 
----
-
-### SearchService.cs — búsqueda híbrida
+### `SimilaritySearchService.cs` — búsqueda por similitud coseno
 
 ```csharp
-public class SearchService(
-    SearchClient searchClient,
-    ILogger<SearchService> logger) : ISearchService
+public class SimilaritySearchService(IAmazonDynamoDB dynamoDb, IOptions<DynamoDbOptions> opts)
 {
-    public async Task<IReadOnlyList<SourceChunk>> HybridSearchAsync(
-        string query,
-        ReadOnlyMemory<float> vector,
-        int topK,
-        string? filter,
-        CancellationToken ct = default)
+    public async Task<IReadOnlyList<SourceChunk>> SearchAsync(
+        ReadOnlyMemory<float> queryVector, int topK, CancellationToken ct = default)
     {
-        var options = new SearchOptions
+        // Scan completo de la tabla de chunks — viable para un corpus académico
+        var scan = await dynamoDb.ScanAsync(new ScanRequest
         {
-            Size = topK,
-            Filter = filter,
-            Select = { "doc_id", "filename", "text", "page" },
-            VectorSearch = new VectorSearchOptions
-            {
-                Queries =
-                {
-                    new VectorizedQuery(vector)
-                    {
-                        KNearestNeighborsCount = topK,
-                        Fields = { "embedding" }
-                    }
-                }
-            },
-            // Búsqueda semántica sobre los resultados vectoriales
-            SemanticSearch = new SemanticSearchOptions
-            {
-                SemanticConfigurationName = "default",
-                QueryCaption = new QueryCaption(QueryCaptionType.Extractive)
-            }
-        };
+            TableName = opts.Value.ChunksTableName
+        }, ct);
 
-        var response = await searchClient.SearchAsync<SearchDocument>(query, options, ct);
+        var ranked = scan.Items
+            .Select(item => new
+            {
+                Item = item,
+                Score = CosineSimilarity(queryVector.Span, ParseEmbedding(item["embedding"]))
+            })
+            .OrderByDescending(x => x.Score)
+            .Take(topK)
+            .Select(x => new SourceChunk(
+                DocId: x.Item["documentId"].S,
+                Filename: x.Item["filename"].S,
+                Chunk: x.Item["text"].S,
+                Score: x.Score,
+                Page: int.Parse(x.Item.GetValueOrDefault("page")?.N ?? "0")
+            ))
+            .ToList();
 
-        var chunks = new List<SourceChunk>();
-        await foreach (var result in response.Value.GetResultsAsync())
+        return ranked;
+    }
+
+    private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
+    {
+        float dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < a.Length; i++)
         {
-            chunks.Add(new SourceChunk(
-                DocId:    result.Document["doc_id"].ToString()!,
-                Filename: result.Document["filename"].ToString()!,
-                Chunk:    result.Document["text"].ToString()!,
-                Score:    result.Score ?? 0,
-                Page:     Convert.ToInt32(result.Document["page"])
-            ));
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
         }
-
-        logger.LogInformation("Hybrid search returned {Count} chunks", chunks.Count);
-        return chunks;
+        return dot / (MathF.Sqrt(normA) * MathF.Sqrt(normB) + 1e-8f);
     }
+
+    private static float[] ParseEmbedding(AttributeValue attr) =>
+        attr.L.Select(v => float.Parse(v.N)).ToArray();
 }
 ```
 
----
-
-### Endpoints — Minimal API
+### `RagAnswerService.cs` — completions con Bedrock (Claude)
 
 ```csharp
-// Endpoints/QueryEndpoints.cs
-public static class QueryEndpoints
+public class RagAnswerService(IAmazonBedrockRuntime bedrock, IOptions<BedrockOptions> opts)
 {
-    public static IEndpointRouteBuilder MapQueryEndpoints(this IEndpointRouteBuilder app)
+    public async Task<string> GenerateAnswerAsync(
+        string query, IReadOnlyList<SourceChunk> chunks, CancellationToken ct = default)
     {
-        var group = app.MapGroup("/").RequireAuthorization();
+        var context = string.Join("\n\n", chunks.Select((c, i) =>
+            $"[Fragmento {i + 1} — {c.Filename}]\n{c.Chunk}"));
 
-        group.MapPost("/query", async (
-            QueryRequest request,
-            IRagService ragService,
-            CancellationToken ct) =>
+        var prompt = $"""
+            Sos un asistente que responde preguntas basándose exclusivamente en los
+            fragmentos de documentos provistos. Si la respuesta no está en los
+            fragmentos, indicalo claramente.
+
+            Pregunta: {query}
+
+            Fragmentos relevantes:
+            {context}
+            """;
+
+        var payload = JsonSerializer.Serialize(new
         {
-            var result = await ragService.QueryAsync(request, ct);
-            return Results.Ok(result);
-        })
-        .WithName("Query")
-        .Produces<QueryResponse>()
-        .ProducesProblem(400)
-        .ProducesProblem(500);
+            anthropic_version = "bedrock-2023-05-31",
+            max_tokens = 1500,
+            temperature = 0.1,
+            messages = new[] { new { role = "user", content = prompt } }
+        });
 
-        return app;
-    }
-}
-
-// Endpoints/UploadEndpoints.cs
-public static class UploadEndpoints
-{
-    public static IEndpointRouteBuilder MapUploadEndpoints(this IEndpointRouteBuilder app)
-    {
-        var group = app.MapGroup("/").RequireAuthorization();
-
-        group.MapPost("/upload", async (
-            IFormFile file,
-            [FromForm] string category,
-            IBlobService blobService,
-            CancellationToken ct) =>
+        var response = await bedrock.InvokeModelAsync(new InvokeModelRequest
         {
-            var docId   = Guid.NewGuid().ToString();
-            var blobUrl = await blobService.UploadAsync(file, docId, category, ct);
+            ModelId = opts.Value.ChatModelId, // "anthropic.claude-3-haiku-20240307-v1:0"
+            ContentType = "application/json",
+            Body = new MemoryStream(Encoding.UTF8.GetBytes(payload))
+        }, ct);
 
-            return Results.Accepted("/upload", new UploadResponse(
-                DocId:    docId,
-                Filename: file.FileName,
-                Status:   "indexing",
-                BlobUrl:  blobUrl
-            ));
-        })
-        .WithName("Upload")
-        .DisableAntiforgery()
-        .Produces<UploadResponse>(202)
-        .ProducesProblem(400);
-
-        return app;
+        var result = await JsonSerializer.DeserializeAsync<ClaudeResponse>(response.Body, cancellationToken: ct);
+        return result!.Content[0].Text;
     }
+
+    private record ClaudeResponse(ClaudeContent[] Content);
+    private record ClaudeContent(string Text);
 }
 ```
 
----
-
-### Azure Function — DocumentIndexer.cs
-
-```csharp
-public class DocumentIndexer(
-    ChunkerService chunker,
-    EmbeddingService embeddings,
-    SearchIndexerService indexer,
-    ILogger<DocumentIndexer> logger)
-{
-    // El binding de Blob trigger detecta automáticamente archivos nuevos en el container
-    [Function("DocumentIndexer")]
-    public async Task RunAsync(
-        [BlobTrigger("docs/{name}", Connection = "AzureStorageConnection")] BlobClient blobClient,
-        string name,
-        CancellationToken ct)
-    {
-        logger.LogInformation("Indexing document: {Name}", name);
-
-        // 1. Descargar y extraer texto del blob
-        var content = await blobClient.DownloadContentAsync(ct);
-        var text = ExtractText(content.Value.Content.ToArray(), name);
-
-        // 2. Dividir en chunks con sliding window
-        var chunks = chunker.SlidingWindow(text, windowSize: 512, overlap: 64);
-        logger.LogInformation("Created {Count} chunks for {Name}", chunks.Count, name);
-
-        // 3. Generar embeddings en batch
-        var vectors = await embeddings.EmbedBatchAsync(chunks.Select(c => c.Text), ct);
-
-        // 4. Indexar en Azure AI Search
-        var docId = Path.GetFileNameWithoutExtension(name);
-        await indexer.IndexChunksAsync(docId, name, chunks, vectors, ct);
-
-        logger.LogInformation("Document {Name} indexed successfully", name);
-    }
-
-    private static string ExtractText(byte[] content, string filename) =>
-        Path.GetExtension(filename).ToLower() switch
-        {
-            ".txt"  => System.Text.Encoding.UTF8.GetString(content),
-            ".pdf"  => ExtractPdfText(content),   // usar PdfPig
-            ".docx" => ExtractDocxText(content),   // usar DocumentFormat.OpenXml
-            _       => throw new NotSupportedException($"Unsupported file type: {filename}")
-        };
-}
-```
-
----
-
-### ChunkerService.cs — sliding window
+### `ChunkerService.cs` — sliding window (sin cambios respecto a la versión Azure)
 
 ```csharp
 public class ChunkerService
 {
     public record Chunk(string Text, int StartIndex, int WordCount);
 
-    // Sliding window con overlap para no perder contexto entre chunks
     public IReadOnlyList<Chunk> SlidingWindow(string text, int windowSize = 512, int overlap = 64)
     {
-        var words  = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var chunks = new List<Chunk>();
-        var step   = windowSize - overlap;
+        var step = windowSize - overlap;
 
         for (int i = 0; i < words.Length; i += step)
         {
-            var end       = Math.Min(i + windowSize, words.Length);
+            var end = Math.Min(i + windowSize, words.Length);
             var chunkText = string.Join(' ', words[i..end]);
             chunks.Add(new Chunk(chunkText, i, end - i));
-
             if (end == words.Length) break;
         }
 
@@ -632,201 +426,136 @@ public class ChunkerService
 
 ---
 
-### ExceptionMiddleware.cs — manejo centralizado de errores
-
-```csharp
-public class ExceptionMiddleware(RequestDelegate next, ILogger<ExceptionMiddleware> logger)
-{
-    public async Task InvokeAsync(HttpContext context)
-    {
-        try
-        {
-            await next(context);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Unhandled exception on {Method} {Path}",
-                context.Request.Method, context.Request.Path);
-
-            context.Response.StatusCode  = StatusCodes.Status500InternalServerError;
-            context.Response.ContentType = "application/json";
-
-            await context.Response.WriteAsJsonAsync(new
-            {
-                error   = "Internal server error",
-                traceId = Activity.Current?.Id ?? context.TraceIdentifier
-            });
-        }
-    }
-}
-```
-
----
-
-### Options — strongly-typed configuration
-
-```csharp
-// Core/Options/OpenAIOptions.cs
-public class OpenAIOptions
-{
-    [Required] public string Endpoint            { get; set; } = "";
-    [Required] public string ApiKey              { get; set; } = "";
-    [Required] public string EmbeddingDeployment { get; set; } = "text-embedding-3-large";
-    [Required] public string ChatDeployment      { get; set; } = "gpt-4o";
-}
-
-// Core/Options/SearchOptions.cs
-public class SearchOptions
-{
-    [Required] public string Endpoint  { get; set; } = "";
-    [Required] public string ApiKey    { get; set; } = "";
-    [Required] public string IndexName { get; set; } = "documents";
-}
-
-// Core/Options/BlobOptions.cs
-public class BlobOptions
-{
-    [Required] public string ConnectionString { get; set; } = "";
-    [Required] public string Container        { get; set; } = "docs";
-}
-```
-
----
-
-### appsettings.json
-
-```json
-{
-  "AzureOpenAI": {
-    "Endpoint": "https://my-openai.openai.azure.com/",
-    "ApiKey": "",
-    "EmbeddingDeployment": "text-embedding-3-large",
-    "ChatDeployment": "gpt-4o"
-  },
-  "AzureSearch": {
-    "Endpoint": "https://my-search.search.windows.net",
-    "ApiKey": "",
-    "IndexName": "documents"
-  },
-  "AzureBlob": {
-    "ConnectionString": "",
-    "Container": "docs"
-  },
-  "AzureAd": {
-    "TenantId": "",
-    "ClientId": "",
-    "Audience": "api://my-app-id"
-  },
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
-    }
-  }
-}
-```
-
-> En desarrollo local usar `appsettings.Development.json` con `dotnet user-secrets`
-> para los valores sensibles. Nunca commitear credenciales.
-
-```bash
-dotnet user-secrets set "AzureOpenAI:ApiKey" "tu-key-aqui"
-dotnet user-secrets set "AzureSearch:ApiKey" "tu-key-aqui"
-dotnet user-secrets set "AzureBlob:ConnectionString" "tu-connection-string"
-```
-
----
-
 ## Endpoints de la API
 
-| Método | Path                    | Auth | Descripción                                       |
-|--------|-------------------------|------|---------------------------------------------------|
-| POST   | `/upload`               | JWT  | Sube documento, dispara indexación                |
-| POST   | `/query`                | JWT  | Búsqueda semántica RAG                            |
-| POST   | `/reindex/{docId}`      | JWT  | Fuerza re-indexación de un documento              |
-| GET    | `/documents`            | JWT  | Lista documentos con estado y metadata            |
-| GET    | `/health`               | none | Health check de conectividad con Azure services   |
+| Método | Path | Auth | Lambda | Descripción |
+|---|---|---|---|---|
+| POST | `/upload` | JWT (Cognito) | `upload-service` | Sube documento a S3, dispara indexación |
+| POST | `/query` | JWT (Cognito) | `query-service` | Búsqueda semántica RAG |
+| GET | `/documents` | JWT (Cognito) | `documents-service` | Lista documentos con estado y metadata |
+| POST | `/reindex/{docId}` | JWT (Cognito) | `documents-service` | Fuerza re-indexación |
+| DELETE | `/documents/{docId}` | JWT (Cognito) | `documents-service` | Elimina documento y sus chunks |
+| GET | `/health` | none | `documents-service` | Health check |
 
 ---
 
-## Dockerfile — ASP.NET Core
-
-```dockerfile
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
-WORKDIR /app
-EXPOSE 8080
-
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-WORKDIR /src
-COPY ["src/SemanticSearch.Api/SemanticSearch.Api.csproj",   "SemanticSearch.Api/"]
-COPY ["src/SemanticSearch.Core/SemanticSearch.Core.csproj", "SemanticSearch.Core/"]
-RUN dotnet restore "SemanticSearch.Api/SemanticSearch.Api.csproj"
-
-COPY src/ .
-WORKDIR "/src/SemanticSearch.Api"
-RUN dotnet build -c Release -o /app/build
-
-FROM build AS publish
-RUN dotnet publish -c Release -o /app/publish --no-restore
-
-FROM base AS final
-WORKDIR /app
-COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "SemanticSearch.Api.dll"]
-```
-
----
-
-## Deploy — Azure Container Apps
-
-```bash
-# 1. Provisionar infra con Bicep
-az deployment group create \
-  --resource-group rg-semantic-search \
-  --template-file infra/main.bicep \
-  --parameters @infra/params.json
-
-# 2. Build y push de la imagen al Azure Container Registry
-az acr build \
-  --registry myregistry \
-  --image semantic-search-api:latest \
-  ./src/SemanticSearch.Api
-
-# 3. Crear la Container App
-az containerapp create \
-  --name semantic-search-api \
-  --resource-group rg-semantic-search \
-  --environment my-env \
-  --image myregistry.azurecr.io/semantic-search-api:latest \
-  --target-port 8080 \
-  --ingress external \
-  --min-replicas 1 \
-  --max-replicas 10 \
-  --env-vars \
-    AzureOpenAI__Endpoint=https://my-openai.openai.azure.com/ \
-    AzureSearch__Endpoint=https://my-search.search.windows.net \
-    AzureSearch__IndexName=documents \
-  --secrets \
-    openai-key=keyvaultref:... \
-    search-key=keyvaultref:...
-
-# 4. Desplegar la Azure Function
-cd src/SemanticSearch.Functions
-func azure functionapp publish semantic-search-indexer
-```
-
----
-
-## Pipeline CI/CD — GitHub Actions
+## `infra/template.yaml` — AWS SAM (esqueleto)
 
 ```yaml
-# .github/workflows/deploy-api.yml
-name: Deploy API
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SemanticSearch RAG — serverless
+
+Globals:
+  Function:
+    Runtime: dotnet8
+    Timeout: 30
+    MemorySize: 512
+
+Resources:
+  DocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub semantic-search-docs-${AWS::AccountId}
+
+  ChunksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: semantic-search-chunks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: documentId
+          AttributeType: S
+        - AttributeName: chunkId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: documentId
+          KeyType: HASH
+        - AttributeName: chunkId
+          KeyType: RANGE
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Upload/
+      Handler: SemanticSearch.Functions.Upload::SemanticSearch.Functions.Upload.UploadFunction::FunctionHandler
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref DocsBucket
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /upload
+            Method: post
+
+  IndexerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/SemanticSearch.Functions.Indexer/
+      Handler: SemanticSearch.Functions.Indexer::SemanticSearch.Functions.Indexer.IndexerFunction::FunctionHandler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref DocsBucket
+        - DynamoDBWritePolicy:
+            TableName: !Ref ChunksTable
+        - Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref DocsBucket
+            Events: s3:ObjectCreated:*
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience:
+                - !Ref UserPoolClient
+            IdentitySource: $request.header.Authorization
+        DefaultAuthorizer: CognitoAuthorizer
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: semantic-search-users
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+```
+
+> Faltan en este esqueleto: `QueryFunction`, `DocumentsFunction`, el bucket
+> `frontend` + distribución CloudFront, y los permisos IAM específicos por función.
+> Ver Fase 10 de [`TODO.md`](../TODO.md).
+
+---
+
+## Pipeline CI/CD — GitHub Actions (OIDC, sin access keys)
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
 
 on:
   push:
     branches: [main]
-    paths: ["src/SemanticSearch.Api/**", "src/SemanticSearch.Core/**"]
+    paths: ["src/**", "infra/**"]
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   build-and-deploy:
@@ -840,89 +569,103 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Test
-        run: dotnet test tests/SemanticSearch.Api.Tests/ --no-build
+        run: dotnet test
 
-      - name: Login to Azure
-        uses: azure/login@v2
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
 
-      - name: Build and push image
-        run: |
-          az acr build \
-            --registry ${{ vars.ACR_NAME }} \
-            --image semantic-search-api:${{ github.sha }} \
-            ./src/SemanticSearch.Api
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
 
-      - name: Update Container App revision
+      - name: Build and deploy
         run: |
-          az containerapp update \
-            --name semantic-search-api \
-            --resource-group ${{ vars.RESOURCE_GROUP }} \
-            --image ${{ vars.ACR_NAME }}.azurecr.io/semantic-search-api:${{ github.sha }}
+          sam build
+          sam deploy --no-confirm-changeset --no-fail-on-empty-changeset
 ```
+
+El rol `AWS_DEPLOY_ROLE_ARN` se crea una sola vez con confianza hacia el OIDC
+provider de GitHub Actions — nunca se guardan access keys de AWS en GitHub Secrets.
+
+---
+
+## Frontend — React (Vite + TypeScript)
+
+```
+frontend/
+├── src/
+│   ├── api/client.ts        # wrapper de fetch con la URL de API Gateway + JWT
+│   ├── pages/
+│   │   ├── UploadPage.tsx   # drag & drop → upload-service
+│   │   ├── DocumentsPage.tsx# lista + estado de indexado → documents-service
+│   │   └── QueryPage.tsx    # chat de preguntas → query-service, muestra fuentes
+│   └── App.tsx
+└── vite.config.ts
+```
+
+```ts
+// src/api/client.ts
+const API_URL = import.meta.env.VITE_API_URL;
+
+export async function query(question: string, token: string) {
+  const res = await fetch(`${API_URL}/query`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ query: question, topK: 5 }),
+  });
+  if (!res.ok) throw new Error(`Query failed: ${res.status}`);
+  return res.json(); // { answer, sources }
+}
+```
+
+Deploy: `npm run build` → sync del directorio `dist/` al bucket S3 `frontend`
+(privado, sin acceso público directo) → invalidación de la distribución
+CloudFront que sirve el contenido con Origin Access Control (OAC).
 
 ---
 
 ## Servidor MCP — agente @doc-search
 
-El servidor MCP está escrito en C# usando `Microsoft.Extensions.AI` y corre como
-proceso local. Copilot Chat de VS Code lo detecta como participante `@doc-search`.
-
-```csharp
-// Tools/SearchDocumentsTool.cs
-public class SearchDocumentsTool(HttpClient httpClient) : IMcpTool
-{
-    public string Name        => "search_documents";
-    public string Description => "Busca documentos por pregunta en lenguaje natural";
-
-    public async Task<string> ExecuteAsync(JsonElement parameters, CancellationToken ct)
-    {
-        var query = parameters.GetProperty("query").GetString()!;
-        var topK  = parameters.TryGetProperty("top_k", out var tk) ? tk.GetInt32() : 5;
-
-        var request  = new { query, top_k = topK };
-        var response = await httpClient.PostAsJsonAsync("/query", request, ct);
-        return await response.Content.ReadAsStringAsync(ct);
-    }
-}
-```
+Sin cambios en el código del servidor MCP; solo cambia la URL a la que apunta
+(ahora la URL de API Gateway en vez de Container Apps).
 
 ```json
-// .vscode/settings.json — configuración del servidor MCP
+// .vscode/settings.json
 {
   "github.copilot.chat.mcpServers": {
     "doc-search": {
       "command": "dotnet",
       "args": ["run", "--project", "src/SemanticSearch.McpServer"],
       "env": {
-        "API_URL": "http://localhost:8080"
+        "API_URL": "https://xxxxxxxxxx.execute-api.us-east-1.amazonaws.com"
       }
     }
   }
 }
 ```
 
-**Ejemplos de uso en Copilot Chat:**
-```
-@doc-search ¿en qué contratos aparece la cláusula de rescisión anticipada?
-@doc-search listá los documentos de la categoría legal subidos esta semana
-@doc-search re-indexá el documento con id abc-123
-```
+---
+
+## Equivalencias Azure → AWS
+
+| Concepto | Azure (versión anterior) | AWS (versión actual) |
+|---|---|---|
+| Storage de documentos | Blob Storage | S3 |
+| Cómputo de indexación | Azure Functions (blob trigger) | Lambda (S3 Event Notification) |
+| Vector store | Azure AI Search | DynamoDB + similitud coseno en código |
+| Embeddings + LLM | Azure OpenAI | Amazon Bedrock (Titan Embed + Claude) |
+| API/cómputo principal | ASP.NET Core en Container Apps | API Gateway (HTTP API) + Lambda |
+| Auth | Azure AD (JWT) | Amazon Cognito (JWT Authorizer nativo) |
+| IaC | Bicep | AWS SAM |
+| Observabilidad | Application Insights | CloudWatch |
+| Secrets en producción | Azure Key Vault | AWS Secrets Manager / SSM Parameter Store |
 
 ---
 
-## Equivalencias Go → C#
-
-| Concepto          | Go (original)              | C# (este blueprint)                        |
-|-------------------|----------------------------|--------------------------------------------|
-| Framework HTTP    | Gin Web Framework          | ASP.NET Core 8 Minimal APIs                |
-| DI container      | Manual en `main.go`        | `IServiceCollection` nativo                |
-| Options           | Structs + env vars         | `IOptions<T>` con validación               |
-| Middleware        | `gin.HandlerFunc`          | `IMiddleware` / `RequestDelegate`          |
-| Interfaces        | `interface{}`              | `interface` con implementación explícita   |
-| Goroutines        | `go func()`                | `async/await` + `CancellationToken`        |
-| Error handling    | `error` como return value  | Exceptions + `ExceptionMiddleware`         |
-| Logging           | `slog`                     | `ILogger<T>` con structured logging        |
-| Tests             | `testing` + `testify`      | `xUnit` + `Moq` + `FluentAssertions`       |
-| Entrypoint        | `cmd/main.go`              | `Program.cs`                               |
+_Stack: .NET 8 · AWS Lambda · API Gateway (HTTP API) · DynamoDB · Amazon Bedrock ·
+S3 · Cognito · CloudFront · AWS SAM · GitHub Actions (OIDC) · React (Vite) + TypeScript_

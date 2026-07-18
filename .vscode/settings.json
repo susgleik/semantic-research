@@ -1,0 +1,15 @@
+{
+  "github.copilot.chat.mcpServers": {
+    "doc-search": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "${workspaceFolder}/src/SemanticSearch.McpServer"
+      ],
+      "env": {
+        "API_URL": "http://localhost:8080"
+      }
+    }
+  }
+}

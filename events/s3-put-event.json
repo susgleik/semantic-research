@@ -1,0 +1,18 @@
+{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "eventName": "ObjectCreated:Put",
+      "s3": {
+        "bucket": {
+          "name": "docs"
+        },
+        "object": {
+          "key": "general/63b2ea9e-cfbe-4261-b584-2b0d2c99eb3f/taller-de-leyes.pdf",
+          "size": 116209
+        }
+      }
+    }
+  ]
+}

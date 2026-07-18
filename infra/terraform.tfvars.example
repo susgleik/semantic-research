@@ -1,0 +1,16 @@
+# Copiar a terraform.tfvars (gitignored) y ajustar si hace falta.
+# La mayoría de estos valores ya tienen un default razonable en variables.tf;
+# solo hace falta un terraform.tfvars propio si querés pisar alguno.
+
+aws_region                = "us-east-1"
+project_prefix            = "semantic-search"
+gemini_ssm_parameter_name = "/semantic-search/gemini-api-key"
+
+dynamodb_read_capacity  = 5
+dynamodb_write_capacity = 5
+
+spa_dev_origin         = "http://localhost:5173"
+cognito_callback_urls  = ["http://localhost:5173"]
+cognito_logout_urls    = ["http://localhost:5173"]
+
+report_expiration_days = 7

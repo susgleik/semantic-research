@@ -1,12 +1,12 @@
-using Azure.AI.OpenAI;
 using Microsoft.Extensions.Options;
+using OpenAI;
 using OpenAI.Embeddings;
 using SemanticSearch.Core.Options;
 
 namespace SemanticSearch.Api.Services;
 
 public class EmbeddingService(
-    AzureOpenAIClient client,
+    OpenAIClient client,
     IOptions<OpenAIOptions> opts) : IEmbeddingService
 {
     private readonly EmbeddingClient _embeddingClient =

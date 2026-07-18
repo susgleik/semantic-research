@@ -10,4 +10,9 @@ public interface ISearchService
         int topK,
         string? filter,
         CancellationToken ct = default);
+
+    Task<IReadOnlyList<DocumentRecord>> ListDocumentsAsync(
+        int skip = 0,
+        int top = 20,
+        CancellationToken ct = default);
 }

@@ -3,14 +3,14 @@ using Azure.Search.Documents.Indexes;
 using Azure.Search.Documents.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using SemanticSearch.Core.Options;
+using CoreOptions = SemanticSearch.Core.Options.SearchOptions;
 using static SemanticSearch.Functions.Services.ChunkerService;
 
 namespace SemanticSearch.Functions.Services;
 
 public class SearchIndexerService(
     SearchIndexClient indexClient,
-    IOptions<SearchOptions> opts,
+    IOptions<CoreOptions> opts,
     ILogger<SearchIndexerService> logger)
 {
     private readonly string _indexName = opts.Value.IndexName;
