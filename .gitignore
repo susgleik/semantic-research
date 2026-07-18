@@ -17,6 +17,18 @@ local.settings.json
 .aws-sam/
 env.local.json
 
+## Terraform (Fase 10)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+infra/publish/
+infra/tfplan
+*.tfplan
+
 ## Docker
 .dockerignore
 
