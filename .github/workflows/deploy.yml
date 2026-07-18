@@ -1,0 +1,91 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write # requerido por configure-aws-credentials (OIDC)
+  contents: read
+
+jobs:
+  build-and-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore SemanticSearch.sln
+
+      - name: Build
+        run: dotnet build SemanticSearch.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test SemanticSearch.sln -c Release --no-build
+
+      - name: Empaquetar Lambdas
+        shell: pwsh
+        run: ./infra/scripts/build-lambdas.ps1
+
+      - name: Configurar credenciales AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform plan
+        working-directory: infra
+        run: terraform plan -out=tfplan
+
+      - name: Subir plan + zips
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: |
+            infra/tfplan
+            infra/publish/*.zip
+          retention-days: 1
+
+  apply:
+    needs: build-and-plan
+    runs-on: ubuntu-latest
+    environment: production # requiere aprobacion manual (reviewer) en GitHub
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar plan + zips
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: . # restaura infra/tfplan e infra/publish/*.zip en su ruta original
+
+      - name: Configurar credenciales AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform apply
+        working-directory: infra
+        run: terraform apply tfplan

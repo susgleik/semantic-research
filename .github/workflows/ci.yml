@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # 8.0.x: los Lambdas y sus tests (runtime real de AWS Lambda).
+          # 10.0.x: SemanticSearch.McpServer, el unico proyecto del .sln en net10.0.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore SemanticSearch.sln
+
+      - name: Build
+        run: dotnet build SemanticSearch.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test SemanticSearch.sln -c Release --no-build
