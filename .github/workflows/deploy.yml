@@ -71,7 +71,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: terraform-plan
-          path: . # restaura infra/tfplan e infra/publish/*.zip en su ruta original
+          # upload-artifact le saca el prefijo comun (infra/) a los paths subidos,
+          # asi que el artifact solo tiene "tfplan" y "publish/*.zip" adentro --
+          # hay que bajarlo directo a infra/ para que terraform los encuentre ahi.
+          path: infra
 
       - name: Configurar credenciales AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
