@@ -271,9 +271,25 @@ descarga.
 - [ ] `deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront (pendiente de que el frontend integre login de Cognito, Fase 6/7)
 - [x] Configurar **OIDC** entre GitHub Actions y AWS — `infra/oidc.tf`:
       `aws_iam_openid_connect_provider` + rol `semantic-search-github-actions-deploy`
-      con trust policy limitada a `repo:susgleik/semantic-research:ref:refs/heads/main`
-      (ni PRs ni otras ramas pueden asumirlo); aplicado en AWS real
-      (`github_actions_role_arn` en outputs)
+      con trust policy limitada a `repo:susgleik/semantic-research` en `main` (ni PRs
+      ni otras ramas pueden asumirlo); aplicado en AWS real (`github_actions_role_arn`
+      en outputs)
+- [x] **Pipeline de CI/CD probado de punta a punta en GitHub real** (push a `main` vía
+      PR → `build-and-plan` automático → aprobación manual del reviewer → `terraform
+      apply` real desde el runner de GitHub, sin ninguna credencial guardada en el
+      repo) — `GET /health` sigue en `200` después del deploy hecho por CI. Tres bugs
+      reales de configuración encontrados y arreglados en el camino:
+  - Faltaba `iam:GetOpenIDConnectProvider` (+ create/delete/tag/list) en la policy del
+    rol de CI — Terraform necesita leer su propio `aws_iam_openid_connect_provider`
+    en cada plan, no solo los recursos de la app
+  - El trust policy solo aceptaba el `sub` claim de rama
+    (`repo:...:ref:refs/heads/main`); el job `apply` usa `environment: production`, y
+    GitHub manda un `sub` distinto en ese caso (`repo:...:environment:production`) —
+    se agregaron ambos patrones a la condición
+  - `actions/upload-artifact` le saca el directorio común (`infra/`) a los paths
+    subidos (`infra/tfplan` + `infra/publish/*.zip` → guardados como `tfplan` +
+    `publish/*.zip`); el `download-artifact` del job `apply` bajaba a la raíz del
+    workspace en vez de `infra/`, y `terraform apply tfplan` no encontraba el archivo
 - [x] Configurar environments en GitHub Actions — `production` con reviewer requerido
       antes del `apply` (setup manual documentado, no se puede hacer con Terraform);
       no se armó un environment `dev` separado porque no hay una segunda cuenta/stack
