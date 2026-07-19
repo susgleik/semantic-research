@@ -30,11 +30,18 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Solo la rama main puede asumir el rol -- ni PRs ni otras ramas.
+    # Solo la rama main puede asumir el rol -- ni PRs ni otras ramas. Se aceptan
+    # ambos formatos de "sub": el job build-and-plan (sin environment) manda
+    # "ref:refs/heads/main"; el job apply (environment: production) manda
+    # "environment:production" en su lugar -- GitHub cambia el claim segun si el
+    # job tiene un Environment asignado o no.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:susgleik/semantic-research:ref:refs/heads/main"]
+      values = [
+        "repo:susgleik/semantic-research:ref:refs/heads/main",
+        "repo:susgleik/semantic-research:environment:production",
+      ]
     }
   }
 }
