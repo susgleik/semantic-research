@@ -372,10 +372,20 @@ descarga.
       `aws_cloudwatch_metric_alarm` por Lambda (`Errors` ≥1 en 5 min, `for_each` sobre
       las 5 funciones), dentro del Always Free (10 alarm metrics permanentes). Topic
       SNS + suscripción por email opcional vía `var.alarm_email` (vacío por defecto —
-      no crea SNS, las alarmas quedan igual visibles en la consola). `terraform plan`
-      confirma 5 alarmas a crear, sin destrucciones. **Pendiente**: setear
-      `alarm_email` en el `.tfvars` real y confirmar la suscripción por email tras el
-      próximo `apply` si se quiere notificación activa (hoy nadie la seteó)
+      no crea SNS, las alarmas quedan igual visibles en la consola). **Aplicado y
+      verificado en AWS real**: las 5 alarmas existen en estado `OK`
+      (`aws cloudwatch describe-alarms`). **Pendiente**: setear `alarm_email` en el
+      `.tfvars` real y confirmar la suscripción por email tras el próximo `apply` si se
+      quiere notificación activa (hoy nadie la seteó)
+      - Dos bugs reales de CI/CD encontrados y arreglados al desplegar esto (mismo
+        patrón que los de Fase 10/13 — permisos incompletos del propio pipeline, no de
+        la app): (1) el `push` a `main` del merge que agregó esto disparó `CI` pero no
+        `Deploy` (falla puntual de GitHub Actions, sin causa visible del lado del
+        repo) — se agregó `workflow_dispatch` a `deploy.yml` para poder re-lanzarlo a
+        mano sin depender de otro commit; (2) el primer `apply` que sí corrió falló
+        con `AccessDenied` en `cloudwatch:PutMetricAlarm` — el rol
+        `semantic-search-github-actions-deploy` nunca había tenido permisos de
+        CloudWatch/SNS, se agregaron en `infra/oidc.tf` (scoped a `semantic-search-*`)
 - [ ] Confirmar que el AWS Budget Alert está activo — no verificable con el usuario IAM
       de despliegue (sin permiso `budgets:ViewBudget`, ver Fase 0), confirmar a mano
 
