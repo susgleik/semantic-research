@@ -134,6 +134,40 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
         Action   = ["iam:ListOpenIDConnectProviders"]
         Resource = "*"
       },
+      {
+        # Fase 14: alarmas de CloudWatch por errores de Lambda (infra/cloudwatch.tf).
+        # No estaba en la policy original -- el primer apply que las incluyo fallo con
+        # AccessDenied en PutMetricAlarm, el mismo tipo de bug de permisos del propio
+        # pipeline de CI ya documentado para Fase 10 (DescribeTable, OIDC provider, etc).
+        Sid    = "CloudWatchAlarms"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricAlarm",
+          "cloudwatch:DeleteAlarms",
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:ListTagsForResource",
+          "cloudwatch:TagResource",
+          "cloudwatch:UntagResource",
+        ]
+        Resource = "arn:aws:cloudwatch:${var.aws_region}:${local.account_id}:alarm:${var.project_prefix}-*"
+      },
+      {
+        # Solo se usa si se setea var.alarm_email (crea el topic SNS + subscription).
+        Sid    = "SnsAlerts"
+        Effect = "Allow"
+        Action = [
+          "sns:CreateTopic",
+          "sns:DeleteTopic",
+          "sns:Subscribe",
+          "sns:Unsubscribe",
+          "sns:GetTopicAttributes",
+          "sns:SetTopicAttributes",
+          "sns:ListSubscriptionsByTopic",
+          "sns:TagResource",
+          "sns:UntagResource",
+        ]
+        Resource = "arn:aws:sns:${var.aws_region}:${local.account_id}:${var.project_prefix}-alerts"
+      },
     ]
   })
 }
