@@ -14,7 +14,10 @@ public class S3DocumentService(IAmazonS3 s3Client, S3Options options) : IS3Docum
             SourceBucket      = options.BucketName,
             SourceKey         = key,
             DestinationBucket = options.BucketName,
-            DestinationKey    = key
+            DestinationKey    = key,
+            // S3 rechaza un CopyObject sobre la misma key si no cambia nada — REPLACE
+            // fuerza a tratarlo como una actualización válida en vez de un no-op.
+            MetadataDirective = S3MetadataDirective.REPLACE
         }, ct);
     }
 

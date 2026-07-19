@@ -113,20 +113,37 @@
 - [x] Crear User Pool de Cognito + App Client — `infra/cognito.tf` (Fase 10): `aws_cognito_user_pool` + `aws_cognito_user_pool_client` (SPA pública, sin secret) + `aws_cognito_user_pool_domain` (Hosted UI)
 - [x] Configurar **JWT Authorizer** nativo de API Gateway HTTP API contra el User Pool (sin código de validación manual) — `infra/apigateway.tf`, `aws_apigatewayv2_authorizer` tipo `JWT`
 - [x] Excluir `/health` del authorizer — única ruta con `authorization_type = "NONE"` en `infra/apigateway.tf`
-- [ ] Documentar flujo de login (Cognito Hosted UI o SDK) para el frontend — pendiente de que el frontend (Fase 7) consuma `cognito_user_pool_id`/`cognito_client_id`/`cognito_domain` (outputs de Terraform, Fase 10)
+- [x] Login del frontend con **`react-oidc-context` + `oidc-client-ts`** (Authorization
+      Code flow contra el Hosted UI de Cognito, ya habilitado en `infra/cognito.tf`
+      con `allowed_oauth_flows = ["code"]` y scopes `openid email profile`) —
+      `frontend/src/auth/config.ts` arma el `authority` OIDC a partir de
+      `VITE_COGNITO_USER_POOL_ID` (discovery document expone el `authorization_endpoint`
+      del Hosted UI automáticamente) y `cognitoLogoutUrl()` arma a mano la URL de
+      `/logout` del dominio (Cognito no implementa RP-initiated logout estándar en
+      Hosted UI classic). `App.tsx` (`AuthGate`) gatea las rutas: sin sesión muestra
+      botón "Iniciar sesión" (`signinRedirect`), con sesión inyecta el `access_token`
+      en `api/client.ts` (`setAuthToken`, header `Authorization: Bearer`) vía `useEffect`
+      y muestra el email + botón "Cerrar sesión". Diseñado para degradar sin romper: si
+      `VITE_COGNITO_USER_POOL_ID`/`_CLIENT_ID`/`_DOMAIN` están vacías (como en `.env`
+      local de Fase 12, que todavía no valida JWT), `authEnabled` da `false`, no se
+      monta `AuthProvider` y la app funciona sin login — evita levantar un mock de
+      Cognito solo para desarrollo local
+      - [ ] Falta probar el flujo real contra el User Pool desplegado en AWS (esta
+            sesión solo validó `tsc -b`/`vite build`, no un login real con
+            `signinRedirect` end-to-end ni el refresh de token)
 
 ---
 
 ## Fase 7 — Frontend (React SPA)
 
-- [ ] Scaffold `frontend/` con Vite + React + TypeScript
-- [ ] Cliente HTTP (`src/api/client.ts`) apuntando a la URL de API Gateway
-- [ ] Vista: subir documento (drag & drop) → `upload-service`
-- [ ] Vista: lista de documentos + estado de indexado → `documents-service`
-- [ ] Vista: buscador/chat de preguntas → `query-service`, mostrando respuesta + fuentes citadas
-- [ ] Vista/acción: botón reindexar documento
-- [ ] Integración de login con Cognito (Hosted UI o `amazon-cognito-identity-js`)
-- [ ] Variables de entorno (`.env`) para URL de API y datos de Cognito (no commitear)
+- [x] Scaffold `frontend/` con Vite + React + TypeScript
+- [x] Cliente HTTP (`src/api/client.ts`) apuntando a la URL de API Gateway
+- [x] Vista: subir documento → `upload-service` (`UploadPage.tsx`)
+- [x] Vista: lista de documentos + estado de indexado → `documents-service` (`DocumentsPage.tsx`)
+- [x] Vista: buscador/chat de preguntas → `query-service`, mostrando respuesta + fuentes citadas (`QueryPage.tsx`)
+- [x] Vista/acción: botón reindexar documento (`DocumentsPage.tsx`)
+- [x] Integración de login con Cognito (`react-oidc-context`) — ver detalle en Fase 6
+- [x] Variables de entorno (`.env`) para URL de API y datos de Cognito (`.env`/`.env.example`, gitignored el real)
 - [ ] Build de producción (`npm run build`) y deploy a S3 (bucket `frontend`) + invalidación de CloudFront
 
 ---
