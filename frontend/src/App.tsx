@@ -1,8 +1,12 @@
+import { useEffect } from 'react';
 import { NavLink, Route, Routes } from 'react-router-dom';
+import { useAuth } from 'react-oidc-context';
 import UploadPage from './pages/UploadPage';
 import DocumentsPage from './pages/DocumentsPage';
 import QueryPage from './pages/QueryPage';
 import ReportsPage from './pages/ReportsPage';
+import { authEnabled, cognitoLogoutUrl } from './auth/config';
+import { setAuthToken } from './api/client';
 
 function navLinkStyle({ isActive }: { isActive: boolean }): React.CSSProperties {
   return {
@@ -14,11 +18,43 @@ function navLinkStyle({ isActive }: { isActive: boolean }): React.CSSProperties 
   };
 }
 
-export default function App() {
+function AppRoutes() {
+  return (
+    <main>
+      <Routes>
+        <Route path="/" element={<UploadPage />} />
+        <Route path="/documents" element={<DocumentsPage />} />
+        <Route path="/query" element={<QueryPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+      </Routes>
+    </main>
+  );
+}
+
+function AppShell({ userEmail }: { userEmail?: string }) {
   return (
     <>
       <header style={{ paddingTop: 32, marginBottom: 32 }}>
-        <h1 style={{ fontSize: 28, margin: '0 0 20px' }}>SemanticSearch</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16 }}>
+          <h1 style={{ fontSize: 28, margin: '0 0 20px' }}>SemanticSearch</h1>
+          {userEmail && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{userEmail}</span>
+              <button
+                onClick={() => (window.location.href = cognitoLogoutUrl())}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text)',
+                }}
+              >
+                Cerrar sesión
+              </button>
+            </div>
+          )}
+        </div>
         <nav style={{ display: 'flex', gap: 24, borderBottom: '1px solid var(--border)' }}>
           <NavLink to="/" end style={navLinkStyle}>
             Subir documento
@@ -35,14 +71,120 @@ export default function App() {
         </nav>
       </header>
 
-      <main>
-        <Routes>
-          <Route path="/" element={<UploadPage />} />
-          <Route path="/documents" element={<DocumentsPage />} />
-          <Route path="/query" element={<QueryPage />} />
-          <Route path="/reports" element={<ReportsPage />} />
-        </Routes>
-      </main>
+      <AppRoutes />
     </>
   );
+}
+
+function LoginScreen() {
+  const auth = useAuth();
+
+  useEffect(() => {
+    setAuthToken(null);
+  }, []);
+
+  return (
+    <div
+      style={{
+        minHeight: '80vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 380,
+          padding: 40,
+          borderRadius: 16,
+          border: '1px solid var(--border)',
+          background: 'var(--bg-subtle)',
+          boxShadow: '0 8px 30px rgba(0, 0, 0, 0.08)',
+          textAlign: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: 56,
+            height: 56,
+            margin: '0 auto 20px',
+            borderRadius: 14,
+            background: 'var(--accent)',
+            color: 'var(--accent-contrast)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 24,
+            fontWeight: 700,
+          }}
+        >
+          S
+        </div>
+
+        <h1 style={{ fontSize: 22, margin: '0 0 8px' }}>SemanticSearch</h1>
+        <p style={{ color: 'var(--text-muted)', margin: '0 0 28px', fontSize: 14, lineHeight: 1.5 }}>
+          Iniciá sesión con tu cuenta para subir documentos, hacer búsquedas semánticas y
+          generar informes.
+        </p>
+
+        {auth.isLoading && (
+          <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Conectando con Cognito…</p>
+        )}
+
+        {auth.error && (
+          <p
+            style={{
+              color: 'var(--danger)',
+              fontSize: 13,
+              background: 'color-mix(in srgb, var(--danger) 12%, transparent)',
+              border: '1px solid var(--danger)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              marginBottom: 20,
+              textAlign: 'left',
+            }}
+          >
+            No se pudo iniciar sesión: {auth.error.message}
+          </p>
+        )}
+
+        {!auth.isLoading && (
+          <button
+            onClick={() => auth.signinRedirect()}
+            style={{
+              width: '100%',
+              padding: '12px 16px',
+              borderRadius: 10,
+              border: 'none',
+              background: 'var(--accent)',
+              color: 'var(--accent-contrast)',
+              fontWeight: 600,
+              fontSize: 15,
+            }}
+          >
+            Iniciar sesión
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AuthGate() {
+  const auth = useAuth();
+
+  useEffect(() => {
+    setAuthToken(auth.user?.access_token ?? null);
+  }, [auth.user]);
+
+  if (!auth.isAuthenticated) {
+    return <LoginScreen />;
+  }
+
+  return <AppShell userEmail={auth.user?.profile.email} />;
+}
+
+export default function App() {
+  return authEnabled ? <AuthGate /> : <AppShell />;
 }

@@ -64,3 +64,62 @@ textarea {
 a {
   color: var(--accent);
 }
+
+.report-content {
+  line-height: 1.6;
+}
+
+.report-content h1,
+.report-content h2,
+.report-content h3 {
+  margin: 24px 0 8px;
+}
+
+.report-content h1:first-child,
+.report-content h2:first-child,
+.report-content h3:first-child {
+  margin-top: 0;
+}
+
+.report-content p {
+  margin: 8px 0;
+}
+
+.report-content ul,
+.report-content ol {
+  padding-left: 24px;
+}
+
+.report-content code {
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.report-content pre {
+  background: var(--bg-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+.report-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.report-content th,
+.report-content td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.report-content blockquote {
+  margin: 8px 0;
+  padding: 4px 16px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
+}
