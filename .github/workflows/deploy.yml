@@ -3,6 +3,10 @@ name: Deploy
 on:
   push:
     branches: [main]
+  # Permite re-disparar el deploy a mano si el push a main no lo activa solo
+  # (pasó una vez: CI corrió para el mismo push, Deploy no — sin esto no había forma
+  # de re-lanzarlo sin otro commit).
+  workflow_dispatch:
 
 permissions:
   id-token: write # requerido por configure-aws-credentials (OIDC)
