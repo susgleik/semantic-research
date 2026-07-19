@@ -23,6 +23,8 @@ Globals:
         S3_SERVICE_URL: http://localstack:4566
         DYNAMODB_TABLE_NAME: chunks
         DYNAMODB_SERVICE_URL: http://dynamodb-local:8000
+        QUERY_CACHE_TABLE_NAME: query-cache
+        QUERY_CACHE_TTL_SECONDS: "600"
         GEMINI_EMBEDDING_MODEL: gemini-embedding-001
         GEMINI_CHAT_MODEL: gemini-flash-latest
         GEMINI_EMBEDDING_DIMENSIONS: "768"

@@ -21,22 +21,26 @@ public class QueryFunction
     private readonly IGeminiEmbeddingService _embeddingService;
     private readonly ISimilaritySearchService _similaritySearch;
     private readonly IRagAnswerService _ragAnswerService;
+    private readonly IQueryCacheService _queryCache;
 
     public QueryFunction() : this(
         BuildEmbeddingService(),
         BuildSimilaritySearchService(),
-        BuildRagAnswerService())
+        BuildRagAnswerService(),
+        BuildQueryCacheService())
     {
     }
 
     public QueryFunction(
         IGeminiEmbeddingService embeddingService,
         ISimilaritySearchService similaritySearch,
-        IRagAnswerService ragAnswerService)
+        IRagAnswerService ragAnswerService,
+        IQueryCacheService queryCache)
     {
         _embeddingService = embeddingService;
         _similaritySearch = similaritySearch;
         _ragAnswerService = ragAnswerService;
+        _queryCache        = queryCache;
     }
 
     public async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(
@@ -57,6 +61,10 @@ public class QueryFunction
 
         var topK = queryRequest.TopK > 0 ? queryRequest.TopK : DefaultTopK;
 
+        var cached = await _queryCache.GetAsync(queryRequest.Query, topK);
+        if (cached is not null)
+            return JsonResponse(cached);
+
         var vectors = await _embeddingService.EmbedBatchAsync(
             [queryRequest.Query], taskType: "RETRIEVAL_QUERY");
         var queryVector = vectors.FirstOrDefault() ?? [];
@@ -65,13 +73,9 @@ public class QueryFunction
         var answer = await _ragAnswerService.GenerateAnswerAsync(queryRequest.Query, sources);
 
         var response = new QueryResponse(answer, sources);
+        await _queryCache.SetAsync(queryRequest.Query, topK, response);
 
-        return new APIGatewayHttpApiV2ProxyResponse
-        {
-            StatusCode = 200,
-            Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
-            Body = JsonSerializer.Serialize(response, JsonOptions)
-        };
+        return JsonResponse(response);
     }
 
     private static APIGatewayHttpApiV2ProxyResponse BadRequest(string error) => new()
@@ -79,6 +83,13 @@ public class QueryFunction
         StatusCode = 400,
         Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
         Body = JsonSerializer.Serialize(new { error }, JsonOptions)
+    };
+
+    private static APIGatewayHttpApiV2ProxyResponse JsonResponse(QueryResponse response) => new()
+    {
+        StatusCode = 200,
+        Headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" },
+        Body = JsonSerializer.Serialize(response, JsonOptions)
     };
 
     private static DynamoDbOptions LoadDynamoDbOptions() => new()
@@ -111,6 +122,20 @@ public class QueryFunction
 
         var context = new DynamoDBContext(dynamoClient);
         return new SimilaritySearchService(new DynamoChunkReader(context, options));
+    }
+
+    private static IQueryCacheService BuildQueryCacheService()
+    {
+        var options = LoadDynamoDbOptions();
+        var dynamoClient = string.IsNullOrEmpty(options.ServiceUrl)
+            ? new AmazonDynamoDBClient(Amazon.RegionEndpoint.GetBySystemName(options.Region))
+            : new AmazonDynamoDBClient(new AmazonDynamoDBConfig { ServiceURL = options.ServiceUrl });
+
+        var context   = new DynamoDBContext(dynamoClient);
+        var tableName = Environment.GetEnvironmentVariable("QUERY_CACHE_TABLE_NAME") ?? "query-cache";
+        var ttlSeconds = int.TryParse(Environment.GetEnvironmentVariable("QUERY_CACHE_TTL_SECONDS"), out var ttl) ? ttl : 600;
+
+        return new QueryCacheService(context, tableName, ttlSeconds);
     }
 
     // HttpClient estático: se reutiliza entre invocaciones dentro del mismo entorno de ejecución del Lambda.
