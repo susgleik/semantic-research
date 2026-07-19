@@ -180,7 +180,10 @@ npm run build
 ```
 
 Ver [`docs/setup-dev-prod.md`](docs/setup-dev-prod.md) para el setup completo de
-credenciales y entornos local/producción, y
+credenciales y entornos local/producción,
 [`docs/local-development.md`](docs/local-development.md) para la referencia
 completa del CLI de AWS/SAM CLI y el entorno local (Docker Compose), con los
-comandos exactos y los problemas reales encontrados al levantarlo.
+comandos exactos y los problemas reales encontrados al levantarlo,
+[`docs/terraform-setup.md`](docs/terraform-setup.md) para el flujo de Terraform y el
+setup de CI/CD, y [`docs/contributing.md`](docs/contributing.md) para cómo se hacen
+los PRs en este repo (`main` protegida, `gh` CLI, qué dispara `ci.yml`/`deploy.yml`).
