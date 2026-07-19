@@ -14,3 +14,12 @@ cognito_callback_urls  = ["http://localhost:5173"]
 cognito_logout_urls    = ["http://localhost:5173"]
 
 report_expiration_days = 7
+
+query_cache_read_capacity  = 2
+query_cache_write_capacity = 2
+query_cache_ttl_seconds    = 600
+
+# Vacío por defecto (no crea topic/subscription de SNS). Poner tu email acá para
+# recibir notificaciones de las alarmas de CloudWatch de errores por Lambda (Fase 14).
+# Requiere confirmar la suscripción por email después del primer apply.
+alarm_email = ""

@@ -138,6 +138,11 @@ resource "aws_iam_role_policy" "query" {
       },
       {
         Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DescribeTable"]
+        Resource = aws_dynamodb_table.query_cache.arn
+      },
+      {
+        Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
         Resource = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter${var.gemini_ssm_parameter_name}"
       },
@@ -163,7 +168,9 @@ resource "aws_lambda_function" "query" {
 
   environment {
     variables = merge(local.gemini_env, {
-      DYNAMODB_TABLE_NAME = aws_dynamodb_table.chunks.name
+      DYNAMODB_TABLE_NAME     = aws_dynamodb_table.chunks.name
+      QUERY_CACHE_TABLE_NAME  = aws_dynamodb_table.query_cache.name
+      QUERY_CACHE_TTL_SECONDS = tostring(var.query_cache_ttl_seconds)
     })
   }
 }

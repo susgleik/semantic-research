@@ -51,3 +51,27 @@ variable "report_expiration_days" {
   type        = number
   default     = 7
 }
+
+variable "query_cache_read_capacity" {
+  description = "RCU provisionadas para la tabla query-cache (Always Free hasta 25 combinadas entre todas las tablas)"
+  type        = number
+  default     = 2
+}
+
+variable "query_cache_write_capacity" {
+  description = "WCU provisionadas para la tabla query-cache (Always Free hasta 25 combinadas entre todas las tablas)"
+  type        = number
+  default     = 2
+}
+
+variable "query_cache_ttl_seconds" {
+  description = "TTL corto para respuestas cacheadas de query-service (evita re-embeddear y re-generar con Gemini en preguntas repetidas)"
+  type        = number
+  default     = 600
+}
+
+variable "alarm_email" {
+  description = "Email para notificaciones de las alarmas de CloudWatch (SNS). Vacío = las alarmas se crean igual (visibles en la consola) pero sin topic/subscription de SNS ni notificación"
+  type        = string
+  default     = ""
+}

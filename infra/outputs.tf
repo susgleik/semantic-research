@@ -8,6 +8,11 @@ output "cloudfront_domain" {
   value       = aws_cloudfront_distribution.frontend.domain_name
 }
 
+output "cloudfront_distribution_id" {
+  description = "ID de la distribución CloudFront (para invalidaciones tras el deploy del frontend)"
+  value       = aws_cloudfront_distribution.frontend.id
+}
+
 output "cognito_user_pool_id" {
   value = aws_cognito_user_pool.main.id
 }
@@ -35,6 +40,11 @@ output "s3_bucket_frontend" {
 
 output "dynamodb_table_name" {
   value = aws_dynamodb_table.chunks.name
+}
+
+output "sns_alerts_topic_arn" {
+  description = "ARN del topic SNS de alarmas (vacío si no se configuró alarm_email)"
+  value       = local.alarm_notifications_enabled ? aws_sns_topic.alerts[0].arn : null
 }
 
 output "github_actions_role_arn" {
