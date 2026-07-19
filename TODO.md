@@ -14,24 +14,24 @@
 
 ## Fase 0 — Setup de cuenta AWS y del proyecto
 
-- [ ] Crear cuenta AWS (si no existe) y activar MFA en el usuario root
-- [ ] Crear/revisar el **AWS Budget Alert** (sin crédito de respaldo ya activo, poner
-      el umbral bajo — ej. $5 USD — ya que S3 y API Gateway se facturan desde el primer
-      uso). Monitorear por separado el consumo de créditos de Gemini en Google AI
-      Studio / Cloud Console (no aparece en el Budget Alert de AWS)
-- [ ] Crear usuario IAM con permisos de despliegue (no usar root para trabajar)
-- [ ] Instalar y configurar AWS CLI (`aws configure`)
-- [ ] Instalar AWS SAM CLI (`sam --version`)
-- [ ] Decidir y documentar la región (ej. `us-east-1`)
-- [ ] Generar API key de Google Gemini en **tier de pago** (Google AI Studio / Cloud
-      Console) contra los $25 USD de créditos comprados — no usar la API key gratuita
-      por las garantías de no-entrenamiento del tier de pago
-- [ ] Guardar la API key de Gemini en SSM Parameter Store (SecureString)
-- [ ] Actualizar `.gitignore` para artefactos de AWS SAM/CDK (`.aws-sam/`, `cdk.out/`)
-- [ ] Eliminar/archivar `infra/*.bicep` (quedan como referencia histórica de la versión Azure)
-- [ ] Migrar IaC de AWS SAM a **Terraform** — reemplaza `infra/template.yaml` por módulos `main.tf` / `variables.tf` / `outputs.tf`
-- [ ] Instalar Terraform CLI y configurar el provider `hashicorp/aws`
-- [ ] Configurar backend remoto S3 + tabla DynamoDB para locking del estado de Terraform (`terraform { backend "s3" { ... } }`)
+- [x] Crear cuenta AWS — confirmado, cuenta `491024724951` con infra real desplegada
+      - [ ] MFA en el usuario root — no verificable por CLI (requiere consola), confirmar a mano
+- [ ] **AWS Budget Alert** — no verificable con el usuario IAM `semantic-search-deploy`
+      (`budgets:ViewBudget` da `AccessDeniedException`, esperado por least-privilege).
+      Confirmar a mano desde la consola con el usuario root/admin que el umbral bajo
+      (~$5 USD) sigue activo
+- [x] Usuario IAM de despliegue creado y en uso — `semantic-search-deploy` (confirmado con `aws iam get-user`)
+- [x] AWS CLI instalado y configurado (usado en toda la sesión)
+- [x] SAM CLI instalado — usado en Fase 12 (`sam build`/`sam local start-api`)
+- [x] Región documentada — `us-east-1` (`infra/terraform.tfvars.example`, `CLAUDE.md`, este archivo)
+- [x] API key de Gemini generada y en uso (no verificable por CLI si es tier de pago vs.
+      gratuito, pero la app funciona con respuestas reales de Gemini en producción)
+- [x] API key de Gemini en SSM Parameter Store — confirmado (`/semantic-search/gemini-api-key`, tipo `SecureString`)
+- [x] `.gitignore` con `.aws-sam/` (`cdk.out/` no aplica — nunca se usó CDK, se migró SAM → Terraform directo)
+- [x] `infra/*.bicep` archivados en `infra/_legacy-azure/` — confirmado
+- [x] IaC migrada de AWS SAM a Terraform — completo desde Fase 10
+- [x] Terraform CLI + provider `hashicorp/aws` configurado y en uso
+- [x] Backend remoto S3 + DynamoDB lock para el state de Terraform — confirmado (Fase 10)
 
 ---
 
@@ -92,7 +92,20 @@
 - [x] `Services/IRagAnswerService.cs` + `RagAnswerService.cs` — arma el prompt con el contexto y llama a Gemini (`gemini-2.0-flash`, `generateContent`) para generar la respuesta con fuentes citadas
 - [x] Modelos `QueryRequest.cs` / `QueryResponse.cs` / `SourceChunk.cs` en `SemanticSearch.Core.Models`
 - [x] Tests (`tests/SemanticSearch.Functions.Query.Tests`) — 9 casos: 3 de `SimilaritySearchService` (ranking por coseno, topK, sin chunks), 2 de `RagAnswerService` (forma del prompt/respuesta contra `HttpMessageHandler` falso, fallback sin candidatos), 4 de `QueryFunction` (request válido, query faltante, JSON inválido, topK forwardeado)
-- [ ] Cachear (TTL corto en DynamoDB) preguntas repetidas para evitar re-embeddear y re-generar con Gemini en cada request
+- [x] Cache de preguntas repetidas — nueva tabla DynamoDB `query-cache` (`infra/dynamodb.tf`,
+      PK `QueryHash`, TTL nativo sobre `ExpiresAt` como limpieza de respaldo async) +
+      `Services/IQueryCacheService.cs`/`QueryCacheService.cs` en `SemanticSearch.Functions.Query`:
+      hashea `query` normalizado (trim + lowercase) + `topK` con SHA-256, y en cada
+      lectura valida `ExpiresAt` contra la hora actual en código (el TTL nativo de
+      DynamoDB no expira al instante, no alcanza para un TTL corto tipo 10 min). Si hay
+      hit, `QueryFunction` devuelve la respuesta cacheada sin llamar a
+      `IGeminiEmbeddingService` ni `IRagAnswerService`; si hay miss, genera la respuesta
+      normal y la guarda con `SetAsync`. TTL configurable por env var
+      `QUERY_CACHE_TTL_SECONDS` (default 600s = 10 min). Permisos IAM mínimos agregados
+      en `lambda.tf` (`GetItem`/`PutItem`/`DescribeTable` solo sobre `query-cache`).
+      Tests: 3 de `QueryCacheServiceTests` (normalización de hash, distinto `topK` es
+      miss, entrada expirada devuelve null) + 2 de `QueryFunctionTests` (hit no llama a
+      Gemini, miss genera y persiste)
 
 ---
 
@@ -105,6 +118,12 @@
 - [x] `GET /health` — healthcheck simple, vive en la misma función (sin auth; la exclusión del JWT authorizer para esta ruta es tarea de Fase 6/infra)
 - [x] Campo `Category` agregado a `ChunkRecord` (Fase 1) y poblado en `IndexerFunction` (Fase 3) — lo necesitaba `documents-service` para reconstruir la key de S3 (`{category}/{docId}/{filename}`) al reindexar/borrar
 - [x] Tests (`tests/SemanticSearch.Functions.Documents.Tests`) — 12 casos: 4 de `DocumentRegistryService.GroupAndPaginate` (agrupado, chunk fallido marca doc como failed, orden por fecha, límite/offset), 8 de `DocumentsFunction` (health, listado con paginación default/custom, reindex encontrado/404, delete encontrado/404, ruta desconocida)
+- [x] Bug real encontrado probando el botón "Reindexar" desde el frontend contra AWS
+      real: S3 rechaza un `CopyObject` sobre la misma key si no cambia metadata
+      (`AmazonS3Exception: illegal because it is trying to copy an object to itself`);
+      como `HandleReindexAsync` no lo capturaba, devolvía 500 al frontend. Fix: agregado
+      `MetadataDirective = S3MetadataDirective.REPLACE` en `S3DocumentService.TriggerReindexAsync`
+      (confirmado con logs de CloudWatch antes/después del fix, desplegado vía CI/CD)
 
 ---
 
@@ -128,9 +147,10 @@
       local de Fase 12, que todavía no valida JWT), `authEnabled` da `false`, no se
       monta `AuthProvider` y la app funciona sin login — evita levantar un mock de
       Cognito solo para desarrollo local
-      - [ ] Falta probar el flujo real contra el User Pool desplegado en AWS (esta
-            sesión solo validó `tsc -b`/`vite build`, no un login real con
-            `signinRedirect` end-to-end ni el refresh de token)
+- [x] Login probado end-to-end contra el User Pool real (`signinRedirect` → Hosted UI →
+      callback a `localhost:5173` con sesión activa, `Authorization: Bearer` llegando a
+      la API real). Usuario de prueba creado con `admin-create-user` + `admin-set-user-password --permanent`
+      (evita el flujo de verificación por email para pruebas manuales)
 
 ---
 
@@ -144,7 +164,14 @@
 - [x] Vista/acción: botón reindexar documento (`DocumentsPage.tsx`)
 - [x] Integración de login con Cognito (`react-oidc-context`) — ver detalle en Fase 6
 - [x] Variables de entorno (`.env`) para URL de API y datos de Cognito (`.env`/`.env.example`, gitignored el real)
-- [ ] Build de producción (`npm run build`) y deploy a S3 (bucket `frontend`) + invalidación de CloudFront
+- [x] Build de producción (`npm run build`, modo Vite `production` → `.env.production`)
+      y deploy a S3 (bucket `frontend`) + invalidación de CloudFront — script
+      `infra/scripts/deploy-frontend.ps1` (build → `aws s3 sync --delete` →
+      `aws cloudfront create-invalidation`). **Verificado en real**:
+      `https://dv3okb4rzqrhb.cloudfront.net/` responde `200`, login contra Cognito
+      funciona (el callback URL de CloudFront ya está registrado en el App Client vía
+      `cognito.tf`). Pendiente: automatizar en `deploy-frontend.yml` (Fase 13) — hoy
+      es manual
 
 ---
 
@@ -198,7 +225,8 @@
 - [x] **Pipeline completo probado en AWS real** (usuario de prueba creado a mano en Cognito vía `admin-create-user`/`admin-initiate-auth`, no vía frontend): `POST /upload` → PUT a S3 → `indexer-service` dispara solo por el evento S3 → 2 chunks indexados en DynamoDB con embeddings de Gemini → `POST /query` devuelve respuesta con fuentes citadas. Dos bugs reales más encontrados y arreglados en el camino, invisibles en local:
   - Faltaba `dynamodb:DescribeTable` en las 4 policies IAM que usan `IDynamoDBContext` (Indexer/Query/Documents/Reports) — el SDK de alto nivel lo llama internamente antes de leer/escribir, no solo `PutItem`/`Scan`/etc
   - `gemini-2.5-flash` pasó a "no disponible para usuarios nuevos" del lado de Google — se cambió el default a `gemini-flash-latest` (alias que sigue siempre al Flash estable vigente) en `GeminiOptions.cs`, los 3 `LoadGeminiOptions()`, `infra/lambda.tf` y `template.local.yaml`
-- [ ] Reemplazar `sam build && sam deploy` por `terraform init && terraform plan && terraform apply` en los workflows de CI/CD (Fase 13)
+- [x] Reemplazar `sam build && sam deploy` por Terraform en los workflows de CI/CD —
+      hecho en Fase 13 (`deploy.yml` corre `terraform plan`/`apply`), esta línea quedó desactualizada
 - [x] **Cambios de código descubiertos al diseñar el Terraform** (necesarios para desplegar de forma segura/correcta en AWS real, no específicos de Terraform):
   - `GEMINI_API_KEY` ya no se lee como variable de entorno plana en Indexer/Query/Reports — nuevo `SemanticSearch.Core/Options/GeminiSecretLoader.cs` la busca en SSM (`GEMINI_API_KEY_SSM_PARAM`, `WithDecryption`) y la cachea por contenedor; en local (sin esa variable) cae al `GEMINI_API_KEY` de siempre, no rompe Fase 12
   - Guard de una línea en `IndexerFunction.ProcessRecordAsync`: ignora eventos S3 sobre keys que ya empiezan con `failed/` — sin esto, la notificación S3→Lambda (necesaria sobre todo el bucket `docs`, las categorías las elige el usuario) reprocesaría en loop cada objeto movido a `failed/` por un fallo previo (invisible en local porque ahí `indexer-service` se invoca a mano, nunca automático)
@@ -226,11 +254,18 @@ descarga.
   - `compare` — comparativa entre dos documentos específicos (recibe dos `documentId`, validado en el handler)
   - `extract` — extracción de datos clave (fechas, nombres, cláusulas)
   - `custom` — el usuario escribe libremente qué quiere analizar (`instruction` obligatorio, validado en el handler)
-- [ ] Vista en el frontend: selector de escenario + parámetros → botón "Generar informe" → estado `generando...` → botón de descarga cuando esté listo (pendiente de Fase 7)
+- [x] Vista en el frontend: selector de escenario (tarjetas) + parámetros → botón
+      "Generar informe" → preview del markdown renderizado en la página (`react-markdown`
+      + `remark-gfm`, fetch del `downloadUrl`) → botones "Descargar .md" y "Descargar PDF"
+      (PDF vía `window.print()` en una ventana con estilos propios, sin librería pesada
+      ni endpoint nuevo). Historial local (`localStorage`, últimos 10) con botón "Ver"
+      que llama `GET /reports/{reportId}` para refrescar la URL firmada (expira a los 15 min)
 - [x] Bucket S3 `reports` — ya lo crea el contenedor `setup` de `docker-compose.yml` (Fase 12); la política de expiración de objetos (7 días) y el bucket de producción quedan para Terraform (Fase 10), ya que no existe `infra/template.yaml` de AWS real en este repo (solo `template.local.yaml` para el entorno local)
 - [x] Lambda `ReportsFunction` agregada a `template.local.yaml` (`POST /reports`, `GET /reports/{reportId}`) + `S3_BUCKET_REPORTS` en `Globals.Function.Environment.Variables`
 - [x] Tests (`tests/SemanticSearch.Functions.Reports.Tests`) — 18 casos: 5 de `ReportGeneratorService.FilterChunks`/`GenerateReportAsync` (filtros por categoría/documentIds/fecha, map-reduce con N+1 llamadas, orden de chunks dentro de un documento), 3 de `ReportChatService` (forma del request/response y error body contra `HttpMessageHandler` falso), 10 de `ReportFunction` (creación válida, escenario faltante/desconocido, `compare` sin 2 `documentIds`, `custom` sin `instruction`, JSON inválido, GET encontrado/404, ruta desconocida)
-- [ ] Permisos IAM: `report-service` necesita `dynamodb:Scan` sobre la tabla `chunks` + `s3:PutObject`/`s3:GetObject` sobre el bucket `reports` + `ssm:GetParameter` sobre el parámetro de la API key de Gemini (no requiere permisos de Bedrock) — pendiente de Fase 10 (Terraform)
+- [x] Permisos IAM de `report-service` — confirmado en `infra/lambda.tf`
+      (`aws_iam_role_policy.reports`): `dynamodb:Scan`+`DescribeTable` sobre `chunks`,
+      `s3:PutObject`/`GetObject` sobre `reports`, `ssm:GetParameter` sobre la API key de Gemini
 
 ---
 
@@ -267,8 +302,12 @@ descarga.
   - `gemini-2.0-flash` fue dado de baja por Google ("no longer available") → default cambiado a `gemini-2.5-flash`
   - `GeminiEmbeddingService`/`RagAnswerService` solo hacían `EnsureSuccessStatusCode()` sin capturar el body del error — se agregó captura del body de Gemini en la excepción (crítico para poder diagnosticar los dos puntos anteriores)
   - `ChunkRecord.Embedding` (`List<float>`) se guardaba en DynamoDB como **Number Set (NS)** por el converter default del SDK — los Sets no garantizan orden y descartan valores duplicados, corrompiendo el vector silenciosamente. Se agregó `FloatListConverter : IPropertyConverter` + `[DynamoDBProperty(typeof(FloatListConverter))]` para forzar almacenamiento como **List (L)** ordenada
-- [ ] Mock de Cognito para probar rutas con auth (ninguna ruta actual la exige todavía — Fase 6 pendiente)
-- [ ] Frontend: `npm run dev` apuntando al gateway local (pendiente de Fase 7)
+- [ ] Mock de Cognito para probar rutas con auth **en local** — sigue pendiente: las
+      rutas reales en AWS ya exigen JWT (Fase 6 resuelta), pero el entorno local
+      (`sam local start-api`) no valida token, así que no se puede probar el flujo de
+      auth completo sin pegarle a AWS real (`npm run dev:cloud`)
+- [x] Frontend `npm run dev` apuntando al gateway local — resuelto vía `.env.development`
+      (modo dev de Vite, Fase 7), sin tocar nada a mano
 - [x] Sección "Entorno local (Docker Compose)" en `docs/architecture.md` — **desactualizada**: describe el gateway Nginx/Traefik del plan original, hay que reescribirla para reflejar SAM CLI
 
 ---
@@ -285,7 +324,11 @@ descarga.
       job `apply` que corre `terraform apply` gateado por el Environment `production`
       de GitHub (aprobación manual, ver `docs/terraform-setup.md#6`). Reemplaza al
       `sam build && sam deploy` original (ya migrado a Terraform en Fase 10)
-- [ ] `deploy-frontend.yml` — build de React + sync a S3 + invalidación CloudFront (pendiente de que el frontend integre login de Cognito, Fase 6/7)
+- [ ] `deploy-frontend.yml` — automatizar en CI/CD lo que hoy es manual (Fase 7):
+      `infra/scripts/deploy-frontend.ps1` ya hace build + `s3 sync` + invalidación de
+      CloudFront y quedó probado corriéndolo a mano; falta engancharlo a un workflow
+      de GitHub Actions (mismo patrón OIDC que `deploy.yml`) para que corra solo en
+      push a `main`
 - [x] Configurar **OIDC** entre GitHub Actions y AWS — `infra/oidc.tf`:
       `aws_iam_openid_connect_provider` + rol `semantic-search-github-actions-deploy`
       con trust policy limitada a `repo:susgleik/semantic-research` en `main` (ni PRs
@@ -319,25 +362,43 @@ descarga.
 
 ## Fase 14 — Deploy y configuración en AWS
 
-- [ ] `sam build && sam deploy --guided` (primer deploy)
-- [ ] Verificar conectividad con `GET /health`
-- [ ] Probar pipeline de ingesta completo (subir doc → ver chunks en DynamoDB)
-- [ ] Probar pipeline de query completo (pregunta → respuesta con fuentes)
-- [ ] Deploy del frontend a S3 + CloudFront, verificar la app en el dominio de CloudFront
-- [ ] Configurar monitoreo básico con CloudWatch (logs + alarma de errores)
-- [ ] Confirmar que el AWS Budget Alert está activo
+- [x] ~~`sam build && sam deploy --guided`~~ — obsoleto, reemplazado por
+      `terraform apply` vía CI/CD desde Fase 10/13
+- [x] Verificar conectividad con `GET /health` — confirmado en `200` post-deploy
+- [x] Probar pipeline de ingesta completo (subir doc → ver chunks en DynamoDB) — Fase 10
+- [x] Probar pipeline de query completo (pregunta → respuesta con fuentes) — Fase 10
+- [x] Deploy del frontend a S3 + CloudFront — Fase 7, `https://dv3okb4rzqrhb.cloudfront.net/` en `200`
+- [x] Configurar monitoreo básico con CloudWatch — `infra/cloudwatch.tf`: una
+      `aws_cloudwatch_metric_alarm` por Lambda (`Errors` ≥1 en 5 min, `for_each` sobre
+      las 5 funciones), dentro del Always Free (10 alarm metrics permanentes). Topic
+      SNS + suscripción por email opcional vía `var.alarm_email` (vacío por defecto —
+      no crea SNS, las alarmas quedan igual visibles en la consola). `terraform plan`
+      confirma 5 alarmas a crear, sin destrucciones. **Pendiente**: setear
+      `alarm_email` en el `.tfvars` real y confirmar la suscripción por email tras el
+      próximo `apply` si se quiere notificación activa (hoy nadie la seteó)
+- [ ] Confirmar que el AWS Budget Alert está activo — no verificable con el usuario IAM
+      de despliegue (sin permiso `budgets:ViewBudget`, ver Fase 0), confirmar a mano
 
 ---
 
 ## Checklist de seguridad
 
-- [ ] Nunca commitear credenciales, access keys ni connection strings
-- [ ] Usar `dotnet user-secrets` en desarrollo local
-- [ ] Usar **Secrets Manager** o **SSM Parameter Store** en producción (no variables de entorno en texto plano para secretos) — incluye la API key de Gemini
-- [ ] Validar JWT de Cognito en todos los endpoints excepto `/health`
-- [ ] Configurar CORS correctamente en API Gateway (solo el origen de CloudFront)
-- [ ] Permisos IAM mínimos por Lambda (least privilege, sin `*` en resources)
-- [ ] Bucket S3 `docs` y `frontend` sin acceso público directo (S3 privado + CloudFront con OAC para el frontend)
+- [x] Nunca commitear credenciales, access keys ni connection strings — regla activa,
+      respetada hasta ahora (ej. `.env.production` del frontend gitignored)
+- [x] ~~Usar `dotnet user-secrets` en desarrollo local~~ — obsoleto para las Lambdas
+      actuales: el entorno local (Fase 12) inyecta `GEMINI_API_KEY` vía
+      `env.local.json` + `docker-compose`, no `user-secrets` (ese mecanismo solo
+      lo usa `SemanticSearch.Api`, el proyecto legacy de Azure fuera del build activo)
+- [x] Usar Secrets Manager/SSM en producción — confirmado, `GeminiSecretLoader` lee de
+      SSM Parameter Store (`/semantic-search/gemini-api-key`, `SecureString`)
+- [x] Validar JWT de Cognito en todos los endpoints excepto `/health` — confirmado en
+      `infra/apigateway.tf` (todas las rutas tienen `authorization_type = "JWT"` menos `GET /health`)
+- [x] Configurar CORS en API Gateway — configurado (incluye el dominio de CloudFront +
+      `localhost:5173` para desarrollo, intencional)
+- [x] Permisos IAM mínimos por Lambda — confirmado, cada policy en `lambda.tf` lista
+      acciones y recursos específicos, sin `*`
+- [x] Bucket S3 `docs`/`reports`/`frontend` sin acceso público — confirmado, los 3
+      tienen `aws_s3_bucket_public_access_block` con las 4 flags en `true`
 
 ---
 
