@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
+using SemanticSearch.Core.Services;
 
 namespace SemanticSearch.Functions.Query.Services;
 
@@ -37,7 +38,7 @@ public class RagAnswerService(HttpClient httpClient, GeminiOptions options) : IR
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{options.ChatModel}:generateContent?key={options.ApiKey}";
 
-        using var response = await httpClient.PostAsJsonAsync(url, requestBody, JsonOptions, ct);
+        using var response = await GeminiRetryPolicy.PostAsJsonWithRetryAsync(httpClient, url, requestBody, JsonOptions, ct);
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);

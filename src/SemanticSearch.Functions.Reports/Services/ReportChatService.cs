@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using SemanticSearch.Core.Options;
+using SemanticSearch.Core.Services;
 
 namespace SemanticSearch.Functions.Reports.Services;
 
@@ -20,7 +21,7 @@ public class ReportChatService(HttpClient httpClient, GeminiOptions options) : I
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{options.ChatModel}:generateContent?key={options.ApiKey}";
 
-        using var response = await httpClient.PostAsJsonAsync(url, requestBody, JsonOptions, ct);
+        using var response = await GeminiRetryPolicy.PostAsJsonWithRetryAsync(httpClient, url, requestBody, JsonOptions, ct);
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(ct);
