@@ -9,7 +9,11 @@ namespace SemanticSearch.Functions.Reports.Tests;
 
 public class ReportChatServiceTests
 {
-    private class FakeHttpMessageHandler(HttpResponseMessage response, Action<HttpRequestMessage, string> onRequest)
+    // Factory (no una única instancia) porque GeminiRetryPolicy puede pedir la
+    // respuesta más de una vez en el mismo test (retry ante 429/503) -- reusar un
+    // HttpResponseMessage ya leído/dispuesto tira ObjectDisposedException.
+    private class FakeHttpMessageHandler(
+        Func<HttpResponseMessage> responseFactory, Action<HttpRequestMessage, string> onRequest)
         : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -17,7 +21,7 @@ public class ReportChatServiceTests
         {
             var body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
             onRequest(request, body);
-            return response;
+            return responseFactory();
         }
     }
 
@@ -35,16 +39,17 @@ public class ReportChatServiceTests
         string? capturedBody = null;
 
         var responseJson = """{"candidates":[{"content":{"parts":[{"text":"informe generado"}]}}]}""";
-        var response = new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
-        };
 
-        var handler = new FakeHttpMessageHandler(response, (req, body) =>
-        {
-            capturedRequest = req;
-            capturedBody = body;
-        });
+        var handler = new FakeHttpMessageHandler(
+            () => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+            },
+            (req, body) =>
+            {
+                capturedRequest = req;
+                capturedBody = body;
+            });
         var service = new ReportChatService(new HttpClient(handler), Options());
 
         var result = await service.GenerateAsync("Resumí este documento");
@@ -61,11 +66,12 @@ public class ReportChatServiceTests
     [Fact]
     public async Task GenerateAsync_NoCandidates_ReturnsFallbackMessage()
     {
-        var response = new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""{"candidates":[]}""", Encoding.UTF8, "application/json")
-        };
-        var handler = new FakeHttpMessageHandler(response, (_, _) => { });
+        var handler = new FakeHttpMessageHandler(
+            () => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"candidates":[]}""", Encoding.UTF8, "application/json")
+            },
+            (_, _) => { });
         var service = new ReportChatService(new HttpClient(handler), Options());
 
         var result = await service.GenerateAsync("prompt");
@@ -76,15 +82,18 @@ public class ReportChatServiceTests
     [Fact]
     public async Task GenerateAsync_ErrorStatusCode_ThrowsWithBody()
     {
-        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
-        {
-            Content = new StringContent("""{"error":"rate limited"}""", Encoding.UTF8, "application/json")
-        };
-        var handler = new FakeHttpMessageHandler(response, (_, _) => { });
+        var handler = new FakeHttpMessageHandler(
+            () => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("""{"error":"rate limited"}""", Encoding.UTF8, "application/json")
+            },
+            (_, _) => { });
         var service = new ReportChatService(new HttpClient(handler), Options());
 
         var act = () => service.GenerateAsync("prompt");
 
+        // 429 es "transitorio" para GeminiRetryPolicy -- reintenta (con backoff real,
+        // ~3s en este test) antes de tirar la excepción final con el mismo body.
         (await act.Should().ThrowAsync<HttpRequestException>()).WithMessage("*rate limited*");
     }
 }

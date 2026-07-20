@@ -9,5 +9,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.*" />
+    <PackageReference Include="ModelContextProtocol" Version="1.4.1" />
   </ItemGroup>
 </Project>
