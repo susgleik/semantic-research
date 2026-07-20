@@ -106,6 +106,17 @@
       Tests: 3 de `QueryCacheServiceTests` (normalización de hash, distinto `topK` es
       miss, entrada expirada devuelve null) + 2 de `QueryFunctionTests` (hit no llama a
       Gemini, miss genera y persiste)
+- [x] **Bug real encontrado probando `/query` desde el frontend en AWS real** (vía
+      integración MCP, Fase 8): Gemini devolvía `503 UNAVAILABLE` ("high demand") en
+      `generateContent`, y como nada lo capturaba la excepción subía sin manejar →
+      Lambda 500. Fix: `SemanticSearch.Core/Services/GeminiRetryPolicy.cs`, retry con
+      backoff corto (1s, 2s — 3 intentos en total) ante `503`/`429` de Gemini, sin
+      tocar nada ante errores no transitorios (`400`, etc. — reintentar eso no arregla
+      nada). Centralizado en Core porque los 3 servicios que llaman a Gemini
+      (`GeminiEmbeddingService`, `RagAnswerService` acá, `ReportChatService` en
+      Fase 11) tenían el mismo problema exacto — mismo fix aplicado a los 3. Tests:
+      `GeminiRetryPolicyTests.cs` (reintenta y termina en éxito, no reintenta ante
+      error no transitorio, se rinde después de agotar los reintentos)
 
 ---
 
@@ -177,13 +188,55 @@
 
 ## Fase 8 — SemanticSearch.McpServer
 
-- [x] `Program.cs` — host del servidor MCP
-- [x] `Tools/SearchDocumentsTool.cs` — herramienta `search_documents`
-- [x] `Tools/ListDocumentsTool.cs` — herramienta `list_documents`
-- [x] `Tools/ReindexDocumentTool.cs` — herramienta `reindex_document`
-- [ ] Apuntar las tools a la nueva URL de API Gateway (en vez de Container Apps)
-- [ ] Configurar `.vscode/settings.json` con `github.copilot.chat.mcpServers`
-- [ ] Probar integración con Copilot Chat (`@doc-search`)
+> **Hallazgo real al retomar esta fase:** lo que estaba tildado como hecho (`Program.cs`
+> + las 3 tools) en realidad **no funcionaba como servidor MCP** — no había ningún
+> paquete `ModelContextProtocol` referenciado, `Program.cs` solo levantaba un `Host`
+> genérico sin transporte stdio ni JSON-RPC, y las tools eran clases sueltas
+> (`Name`/`Description`/`ExecuteAsync(JsonElement)`) que nadie invocaba. "Apuntar la
+> URL" no alcanzaba para que esto funcionara con Copilot Chat.
+
+- [x] Agregado el SDK oficial **`ModelContextProtocol`** (NuGet, v1.4.1) — `Program.cs`
+      reescrito con `Host.CreateApplicationBuilder` + `AddMcpServer().WithStdioServerTransport()`;
+      logs redirigidos a stderr (`LogToStandardErrorThreshold`), porque stdout está
+      reservado para los mensajes JSON-RPC del protocolo — si los logs se mezclan ahí,
+      Copilot Chat no puede parsear la salida
+- [x] Las 3 tools reescritas con `[McpServerToolType]`/`[McpServerTool]` + parámetros
+      tipados con `[Description]` (en vez de `JsonElement` parseado a mano), registradas
+      vía `WithTools<T>()`. De paso, un bug real que tenía `SearchDocumentsTool`: mandaba
+      `top_k` (snake_case) en el body, pero `QueryFunction` deserializa con
+      `JsonSerializerDefaults.Web` (camelCase) — el parámetro nunca llegaba, `topK`
+      siempre caía al default de 5 sin importar lo que pidiera la tool
+- [x] Apuntar las tools a la URL real de API Gateway — `.vscode/settings.json`,
+      `API_URL` ahora apunta a `https://is1exk1is3.execute-api.us-east-1.amazonaws.com`
+      (antes tenía `http://localhost:8080`, resabio de Container Apps/local viejo)
+- [x] Agregado soporte de auth — todas las rutas exigen JWT de Cognito salvo `/health`
+      (Fase 6), así que sin esto cada llamada de una tool devolvía 401. Nueva env var
+      `MCP_ACCESS_TOKEN` (Bearer, adjuntado por `Program.cs` a los 3 `HttpClient`
+      tipados); se consigue a mano con `aws cognito-idp admin-initiate-auth` (mismo
+      patrón que el usuario de prueba creado en Fase 10) — **no se refresca solo**,
+      expira a la hora, limitación conocida y documentada, fuera de alcance para esta
+      sesión
+- [x] `.vscode/settings.json` con `github.copilot.chat.mcpServers` — ya existía pero
+      con la URL vieja; actualizado
+- [x] **Probado con un smoke test real por stdio** (sin Copilot Chat, invocando el
+      binario compilado directo): handshake `initialize` responde bien, `tools/list`
+      devuelve las 3 tools con su JSON schema correcto (`search_documents` con
+      `query`/`topK`, `list_documents` con `limit`/`offset`, `reindex_document` con
+      `docId`), stdout queda limpio (solo JSON-RPC)
+- [x] **Probado de verdad con Copilot Chat en VS Code 1.129** — dos hallazgos reales:
+  - El setting `github.copilot.chat.mcpServers` en `.vscode/settings.json` **no existe
+    en VS Code moderno** (era una key experimental vieja) — el MCP nativo del editor se
+    configura con `.vscode/mcp.json` (`servers` + `inputs` para secretos con prompt
+    seguro, en vez de guardar el token en texto plano). Se migró a ese formato.
+  - `tools/call` de `list_documents` tiraba `System.Net.Http.HttpRequestException` /
+    `InvalidOperationException: ... BaseAddress must be set` — el SDK de MCP construye
+    las instancias de las tools sin pasar por el mecanismo de *typed client* de
+    `AddHttpClient<T>()` (usa `ActivatorUtilities` directo), así que terminaba
+    inyectando un `HttpClient` default sin configurar. Fix: un único `HttpClient`
+    configurado a mano y registrado como singleton (`AddSingleton(apiHttpClient)`) en
+    vez de 3 typed clients — sin ambigüedad posible en cómo se resuelve el parámetro
+  - **De paso, este mismo debugging destapó un bug real en `/query` en producción**
+    (ver Fase 4: 503 de Gemini sin manejar → 500)
 
 ---
 
