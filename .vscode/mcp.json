@@ -1,0 +1,21 @@
+{
+  "inputs": [
+    {
+      "id": "mcpAccessToken",
+      "type": "promptString",
+      "description": "Access token de Cognito (aws cognito-idp admin-initiate-auth, campo AuthenticationResult.AccessToken). Expira a la hora.",
+      "password": true
+    }
+  ],
+  "servers": {
+    "doc-search": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["run", "--project", "${workspaceFolder}/src/SemanticSearch.McpServer"],
+      "env": {
+        "API_URL": "https://is1exk1is3.execute-api.us-east-1.amazonaws.com",
+        "MCP_ACCESS_TOKEN": "${input:mcpAccessToken}"
+      }
+    }
+  }
+}

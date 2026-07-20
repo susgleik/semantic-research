@@ -1,19 +1,20 @@
+using System.ComponentModel;
 using System.Net.Http.Json;
-using System.Text.Json;
+using ModelContextProtocol.Server;
 
 namespace SemanticSearch.McpServer.Tools;
 
+[McpServerToolType]
 public class SearchDocumentsTool(HttpClient httpClient)
 {
-    public string Name        => "search_documents";
-    public string Description => "Busca documentos por pregunta en lenguaje natural";
-
-    public async Task<string> ExecuteAsync(JsonElement parameters, CancellationToken ct)
+    [McpServerTool(Name = "search_documents")]
+    [Description("Busca en los documentos indexados una respuesta a una pregunta en lenguaje natural, citando las fuentes exactas.")]
+    public async Task<string> SearchDocuments(
+        [Description("Pregunta en lenguaje natural sobre el contenido de los documentos indexados")] string query,
+        [Description("Cantidad de fragmentos fuente a considerar (default 5)")] int topK = 5,
+        CancellationToken ct = default)
     {
-        var query = parameters.GetProperty("query").GetString()!;
-        var topK  = parameters.TryGetProperty("top_k", out var tk) ? tk.GetInt32() : 5;
-
-        var request  = new { query, top_k = topK };
+        var request  = new { query, topK };
         var response = await httpClient.PostAsJsonAsync("/query", request, ct);
         return await response.Content.ReadAsStringAsync(ct);
     }

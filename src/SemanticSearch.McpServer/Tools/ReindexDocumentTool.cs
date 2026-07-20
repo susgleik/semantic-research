@@ -1,15 +1,17 @@
-using System.Text.Json;
+using System.ComponentModel;
+using ModelContextProtocol.Server;
 
 namespace SemanticSearch.McpServer.Tools;
 
+[McpServerToolType]
 public class ReindexDocumentTool(HttpClient httpClient)
 {
-    public string Name        => "reindex_document";
-    public string Description => "Fuerza la re-indexación de un documento por su ID";
-
-    public async Task<string> ExecuteAsync(JsonElement parameters, CancellationToken ct)
+    [McpServerTool(Name = "reindex_document")]
+    [Description("Fuerza la re-indexación de un documento ya subido, a partir de su docId.")]
+    public async Task<string> ReindexDocument(
+        [Description("docId del documento a reindexar (visible en list_documents)")] string docId,
+        CancellationToken ct = default)
     {
-        var docId    = parameters.GetProperty("doc_id").GetString()!;
         var response = await httpClient.PostAsync($"/reindex/{docId}", content: null, ct);
         return await response.Content.ReadAsStringAsync(ct);
     }
