@@ -178,6 +178,12 @@ function AuthGate() {
     setAuthToken(auth.user?.access_token ?? null);
   }, [auth.user]);
 
+  useEffect(() => {
+    return auth.events.addAccessTokenExpired(() => {
+      void auth.signinRedirect();
+    });
+  }, [auth.events, auth.signinRedirect]);
+
   if (!auth.isAuthenticated) {
     return <LoginScreen />;
   }

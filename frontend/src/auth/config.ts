@@ -18,6 +18,11 @@ export const cognitoAuthConfig: AuthProviderProps = {
   post_logout_redirect_uri: window.location.origin,
   response_type: 'code',
   scope: 'openid email profile',
+  // Cognito Hosted UI no soporta prompt=none, así que el silent renew por iframe
+  // que react-oidc-context intenta por default siempre falla y termina limpiando
+  // la sesión antes de que el access token realmente expire. Se maneja la
+  // expiración con un re-login explícito en vez de renovación silenciosa.
+  automaticSilentRenew: false,
 };
 
 export function cognitoLogoutUrl(): string {
