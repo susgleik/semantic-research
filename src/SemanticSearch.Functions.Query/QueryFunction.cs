@@ -73,7 +73,18 @@ public class QueryFunction
         var answer = await _ragAnswerService.GenerateAnswerAsync(queryRequest.Query, sources);
 
         var response = new QueryResponse(answer, sources);
-        await _queryCache.SetAsync(queryRequest.Query, topK, response);
+
+        try
+        {
+            await _queryCache.SetAsync(queryRequest.Query, topK, response);
+        }
+        catch (Exception ex)
+        {
+            // El cache es una optimización de costo, no una dependencia dura: si
+            // falla (permisos, throttling), la respuesta ya generada por Gemini
+            // igual se devuelve al usuario en vez de perderla.
+            context.Logger.LogWarning($"No se pudo cachear la respuesta de query: {ex.Message}");
+        }
 
         return JsonResponse(response);
     }

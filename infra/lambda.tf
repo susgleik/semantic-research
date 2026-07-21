@@ -137,8 +137,11 @@ resource "aws_iam_role_policy" "query" {
         Resource = aws_dynamodb_table.chunks.arn
       },
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DescribeTable"]
+        Effect = "Allow"
+        # UpdateItem: DynamoDBContext.SaveAsync emite UpdateItem (no PutItem) por
+        # default. Sin este permiso, cachear la respuesta tira AccessDenied y
+        # rompe /query entero aunque Gemini ya haya respondido bien.
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DescribeTable"]
         Resource = aws_dynamodb_table.query_cache.arn
       },
       {
