@@ -31,7 +31,7 @@ function AppRoutes() {
   );
 }
 
-function AppShell({ userEmail }: { userEmail?: string }) {
+function AppShell({ userEmail, onLogout }: { userEmail?: string; onLogout?: () => void }) {
   return (
     <>
       <header style={{ paddingTop: 32, marginBottom: 32 }}>
@@ -41,7 +41,7 @@ function AppShell({ userEmail }: { userEmail?: string }) {
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 20 }}>
               <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>{userEmail}</span>
               <button
-                onClick={() => (window.location.href = cognitoLogoutUrl())}
+                onClick={onLogout}
                 style={{
                   padding: '6px 14px',
                   borderRadius: 8,
@@ -184,11 +184,20 @@ function AuthGate() {
     });
   }, [auth.events, auth.signinRedirect]);
 
+  async function handleLogout() {
+    // Cognito Hosted UI no implementa el end_session_endpoint estándar de OIDC,
+    // así que hay que pegarle a su /logout a mano — pero eso no limpia el usuario
+    // que oidc-client-ts guarda en sessionStorage. Sin este removeUser(), al volver
+    // de Cognito la SPA puede seguir viéndote "logueado" con el token viejo.
+    await auth.removeUser();
+    window.location.href = cognitoLogoutUrl();
+  }
+
   if (!auth.isAuthenticated) {
     return <LoginScreen />;
   }
 
-  return <AppShell userEmail={auth.user?.profile.email} />;
+  return <AppShell userEmail={auth.user?.profile.email} onLogout={() => void handleLogout()} />;
 }
 
 export default function App() {
