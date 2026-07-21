@@ -155,4 +155,37 @@ public class QueryFunctionTests
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    [Fact]
+    public async Task FunctionHandler_CacheWriteFails_StillReturnsGeneratedAnswer()
+    {
+        _context.Setup(c => c.Logger).Returns(Mock.Of<ILambdaLogger>());
+
+        _queryCache
+            .Setup(c => c.GetAsync("pregunta nueva", 5, default))
+            .ReturnsAsync((QueryResponse?)null);
+        _queryCache
+            .Setup(c => c.SetAsync("pregunta nueva", 5, It.IsAny<QueryResponse>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("AccessDenied"));
+
+        _embeddingService
+            .Setup(e => e.EmbedBatchAsync(It.IsAny<IEnumerable<string>>(), "RETRIEVAL_QUERY", default))
+            .ReturnsAsync([[0.1f, 0.2f]]);
+        _similaritySearch
+            .Setup(s => s.SearchAsync(It.IsAny<ReadOnlyMemory<float>>(), 5, default))
+            .ReturnsAsync([]);
+        _ragAnswerService
+            .Setup(r => r.GenerateAnswerAsync("pregunta nueva", It.IsAny<IReadOnlyList<SourceChunk>>(), default))
+            .ReturnsAsync("respuesta nueva");
+
+        var request = new APIGatewayHttpApiV2ProxyRequest
+        {
+            Body = """{"query":"pregunta nueva"}"""
+        };
+
+        var response = await CreateFunction().FunctionHandler(request, _context.Object);
+
+        response.StatusCode.Should().Be(200);
+        response.Body.Should().Contain("respuesta nueva");
+    }
 }
