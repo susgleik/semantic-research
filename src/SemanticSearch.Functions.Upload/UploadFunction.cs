@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.S3;
@@ -27,8 +28,40 @@ public class UploadFunction
         _s3UploadService = s3UploadService;
     }
 
-    public async Task<APIGatewayHttpApiV2ProxyResponse> FunctionHandler(
-        APIGatewayHttpApiV2ProxyRequest request, ILambdaContext context)
+    // Este Lambda también hace de trigger pre-signup de Cognito (no hay presupuesto
+    // para sumar un Lambda nuevo solo para eso — ver infra/cognito.tf). Cognito y
+    // API Gateway invocan el mismo handler configurado, así que hay que distinguir
+    // el evento por forma: los eventos de Cognito traen "triggerSource", los de
+    // API Gateway HTTP API v2 no.
+    public async Task<object> FunctionHandler(JsonElement input, ILambdaContext context)
+    {
+        if (input.TryGetProperty("triggerSource", out var triggerSource) &&
+            (triggerSource.GetString() ?? "").StartsWith("PreSignUp_", StringComparison.Ordinal))
+        {
+            return HandleCognitoPreSignUp(input);
+        }
+
+        var request = JsonSerializer.Deserialize<APIGatewayHttpApiV2ProxyRequest>(input.GetRawText(), JsonOptions)!;
+        return await HandleUploadAsync(request);
+    }
+
+    private static JsonNode HandleCognitoPreSignUp(JsonElement input)
+    {
+        // Sin SES verificado el correo de confirmación de Cognito nunca llega, así
+        // que se autoconfirma la cuenta y se autoverifica el email para no bloquear
+        // el registro (comportamiento temporal — ver comentario en infra/cognito.tf).
+        var node = JsonNode.Parse(input.GetRawText())!.AsObject();
+        var response = (node["response"] as JsonObject) ?? new JsonObject();
+        node["response"] = response;
+
+        response["autoConfirmUser"] = true;
+        if (node["request"]?["userAttributes"]?["email"] is not null)
+            response["autoVerifyEmail"] = true;
+
+        return node;
+    }
+
+    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleUploadAsync(APIGatewayHttpApiV2ProxyRequest request)
     {
         UploadRequest? uploadRequest;
         try
