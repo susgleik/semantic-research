@@ -16,6 +16,24 @@ resource "aws_cognito_user_pool" "main" {
   admin_create_user_config {
     allow_admin_create_user_only = false
   }
+
+  # Sin SES verificado, el correo de verificación que Cognito manda por default
+  # nunca llega (sandbox de SES). Mientras tanto, el trigger pre-signup de Cognito
+  # se enruta al Lambda upload-service ya existente (no se puede sumar un Lambda
+  # nuevo a la arquitectura) — FunctionHandler detecta el evento de Cognito y
+  # autoconfirma/autoverifica sin mandar correo. Ver UploadFunction.cs. Revertir
+  # esto en cuanto se configure SES en producción.
+  lambda_config {
+    pre_sign_up = aws_lambda_function.upload.arn
+  }
+}
+
+resource "aws_lambda_permission" "cognito_pre_signup" {
+  statement_id  = "AllowCognitoInvokePreSignUp"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.upload.function_name
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.main.arn
 }
 
 resource "aws_cognito_user_pool_client" "spa" {
