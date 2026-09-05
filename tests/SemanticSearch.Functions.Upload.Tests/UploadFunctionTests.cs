@@ -23,7 +23,7 @@ public class UploadFunctionTests
     public async Task FunctionHandler_ValidRequest_Returns200WithUploadUrl()
     {
         _s3UploadService
-            .Setup(s => s.CreatePresignedUploadAsync(It.IsAny<string>(), "contratos", "informe.pdf", "application/pdf", default))
+            .Setup(s => s.CreatePresignedUploadAsync(It.IsAny<string>(), "contratos", "informe.pdf", "application/pdf", "", default))
             .ReturnsAsync(("https://s3.example.com/presigned", "contratos/some-id/informe.pdf"));
 
         var input = ToInput(new APIGatewayHttpApiV2ProxyRequest
@@ -36,6 +36,36 @@ public class UploadFunctionTests
         response.StatusCode.Should().Be(200);
         response.Body.Should().Contain("https://s3.example.com/presigned");
         response.Body.Should().Contain("\"status\":\"pending\"");
+    }
+
+    [Fact]
+    public async Task FunctionHandler_AuthenticatedCaller_ThreadsOwnerIdIntoPresignedUpload()
+    {
+        _s3UploadService
+            .Setup(s => s.CreatePresignedUploadAsync(It.IsAny<string>(), "contratos", "informe.pdf", "application/pdf", "user-1", default))
+            .ReturnsAsync(("https://s3.example.com/presigned", "contratos/some-id/informe.pdf"));
+
+        var input = ToInput(new APIGatewayHttpApiV2ProxyRequest
+        {
+            Body = """{"filename":"informe.pdf","category":"contratos","contentType":"application/pdf"}""",
+            RequestContext = new APIGatewayHttpApiV2ProxyRequest.ProxyRequestContext
+            {
+                Authorizer = new APIGatewayHttpApiV2ProxyRequest.AuthorizerDescription
+                {
+                    Jwt = new APIGatewayHttpApiV2ProxyRequest.AuthorizerDescription.JwtDescription
+                    {
+                        Claims = new Dictionary<string, string> { ["sub"] = "user-1" }
+                    }
+                }
+            }
+        });
+
+        var response = (APIGatewayHttpApiV2ProxyResponse)await CreateFunction().FunctionHandler(input, _context.Object);
+
+        response.StatusCode.Should().Be(200);
+        _s3UploadService.Verify(
+            s => s.CreatePresignedUploadAsync(It.IsAny<string>(), "contratos", "informe.pdf", "application/pdf", "user-1", default),
+            Times.Once);
     }
 
     [Fact]

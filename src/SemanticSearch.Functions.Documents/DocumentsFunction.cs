@@ -4,6 +4,7 @@ using Amazon.DynamoDBv2.DataModel;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.S3;
+using SemanticSearch.Core.Auth;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
 using SemanticSearch.Functions.Documents.Services;
@@ -43,11 +44,13 @@ public class DocumentsFunction
         if (method == "GET" && path == "/documents")
             return await HandleListDocumentsAsync(request);
 
+        var ownerId = CallerIdentity.GetOwnerId(request);
+
         if (method == "POST" && path.StartsWith("/reindex/"))
-            return await HandleReindexAsync(ExtractDocId(request, path, "/reindex/"));
+            return await HandleReindexAsync(ExtractDocId(request, path, "/reindex/"), ownerId);
 
         if (method == "DELETE" && path.StartsWith("/documents/") && path != "/documents")
-            return await HandleDeleteAsync(ExtractDocId(request, path, "/documents/"));
+            return await HandleDeleteAsync(ExtractDocId(request, path, "/documents/"), ownerId);
 
         return NotFound();
     }
@@ -59,29 +62,39 @@ public class DocumentsFunction
         var limit  = qs is not null && qs.TryGetValue("limit", out var l) && int.TryParse(l, out var lv) && lv > 0 ? lv : DefaultLimit;
         var offset = qs is not null && qs.TryGetValue("offset", out var o) && int.TryParse(o, out var ov) && ov >= 0 ? ov : 0;
 
-        var (documents, total) = await _registry.ListDocumentsAsync(limit, offset);
+        var ownerId = CallerIdentity.GetOwnerId(request);
+        var (documents, total) = await _registry.ListDocumentsAsync(ownerId, limit, offset);
         return Ok(new DocumentListResponse(documents, total, limit, offset));
     }
 
-    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleReindexAsync(string docId)
+    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleReindexAsync(string docId, string ownerId)
     {
         var chunks = await _registry.GetChunksAsync(docId);
         if (chunks.Count == 0)
             return NotFound();
 
         var first = chunks[0];
-        await _s3DocumentService.TriggerReindexAsync(first.Category, docId, first.Filename);
+        // Mismo 404 tanto si el doc no existe como si es de otro usuario específico —
+        // no revelar existencia. Los legacy/compartidos (OwnerId vacío) son reindexables
+        // por cualquiera, consistente con tratarlos como compartidos en la lectura.
+        if (!string.IsNullOrEmpty(first.OwnerId) && first.OwnerId != ownerId)
+            return NotFound();
+
+        await _s3DocumentService.TriggerReindexAsync(first.Category, docId, first.Filename, first.OwnerId);
 
         return Accepted(new { docId, status = "reindexing" });
     }
 
-    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleDeleteAsync(string docId)
+    private async Task<APIGatewayHttpApiV2ProxyResponse> HandleDeleteAsync(string docId, string ownerId)
     {
         var chunks = await _registry.GetChunksAsync(docId);
         if (chunks.Count == 0)
             return NotFound();
 
         var first = chunks[0];
+        if (!string.IsNullOrEmpty(first.OwnerId) && first.OwnerId != ownerId)
+            return NotFound();
+
         await _registry.DeleteDocumentAsync(docId);
         await _s3DocumentService.DeleteObjectAsync(first.Category, docId, first.Filename);
 

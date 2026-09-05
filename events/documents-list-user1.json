@@ -1,0 +1,15 @@
+{
+  "version": "2.0",
+  "routeKey": "GET /documents",
+  "rawPath": "/documents",
+  "requestContext": {
+    "http": { "method": "GET", "path": "/documents" },
+    "authorizer": {
+      "jwt": {
+        "claims": { "sub": "user-1" },
+        "scopes": null
+      }
+    }
+  },
+  "isBase64Encoded": false
+}

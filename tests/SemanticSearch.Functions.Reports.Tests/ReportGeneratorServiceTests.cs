@@ -9,14 +9,15 @@ public class ReportGeneratorServiceTests
 {
     private static ChunkRecord Chunk(
         string docId, string chunkId, string text, string filename = "doc.pdf",
-        string category = "general", string createdAt = "2026-01-01T00:00:00Z") => new()
+        string category = "general", string createdAt = "2026-01-01T00:00:00Z", string ownerId = "") => new()
     {
         DocumentId = docId,
         ChunkId    = chunkId,
         Text       = text,
         Filename   = filename,
         Category   = category,
-        CreatedAt  = createdAt
+        CreatedAt  = createdAt,
+        OwnerId    = ownerId
     };
 
     [Fact]
@@ -28,7 +29,7 @@ public class ReportGeneratorServiceTests
             Chunk("doc-2", "chunk-000000", "b", category: "finance")
         };
 
-        var result = ReportGeneratorService.FilterChunks(chunks, new ReportRequest("summary", Category: "legal"));
+        var result = ReportGeneratorService.FilterChunks(chunks, new ReportRequest("summary", Category: "legal"), ownerId: "");
 
         result.Should().ContainSingle().Which.DocumentId.Should().Be("doc-1");
     }
@@ -44,7 +45,7 @@ public class ReportGeneratorServiceTests
         };
 
         var result = ReportGeneratorService.FilterChunks(
-            chunks, new ReportRequest("compare", DocumentIds: ["doc-1", "doc-3"]));
+            chunks, new ReportRequest("compare", DocumentIds: ["doc-1", "doc-3"]), ownerId: "");
 
         result.Select(c => c.DocumentId).Should().BeEquivalentTo(["doc-1", "doc-3"]);
     }
@@ -60,9 +61,24 @@ public class ReportGeneratorServiceTests
         };
 
         var result = ReportGeneratorService.FilterChunks(
-            chunks, new ReportRequest("summary", DateFrom: "2026-02-01T00:00:00Z", DateTo: "2026-11-01T00:00:00Z"));
+            chunks, new ReportRequest("summary", DateFrom: "2026-02-01T00:00:00Z", DateTo: "2026-11-01T00:00:00Z"), ownerId: "");
 
         result.Should().ContainSingle().Which.DocumentId.Should().Be("doc-2");
+    }
+
+    [Fact]
+    public void FilterChunks_ByOwnerId_KeepsOwnAndLegacySharedExcludesOtherOwners()
+    {
+        var chunks = new List<ChunkRecord>
+        {
+            Chunk("doc-mine", "chunk-000000", "a", ownerId: "user-1"),
+            Chunk("doc-shared", "chunk-000000", "b", ownerId: ""),
+            Chunk("doc-other", "chunk-000000", "c", ownerId: "user-2")
+        };
+
+        var result = ReportGeneratorService.FilterChunks(chunks, new ReportRequest("summary"), ownerId: "user-1");
+
+        result.Select(c => c.DocumentId).Should().BeEquivalentTo(["doc-mine", "doc-shared"]);
     }
 
     [Fact]
@@ -72,7 +88,7 @@ public class ReportGeneratorServiceTests
         var generator = new ReportGeneratorService(chatService.Object);
 
         var result = await generator.GenerateReportAsync(
-            new ReportRequest("summary", Category: "nonexistent"), []);
+            new ReportRequest("summary", Category: "nonexistent"), [], ownerId: "");
 
         result.Should().Be("No hay documentos que coincidan con los filtros indicados.");
         chatService.Verify(c => c.GenerateAsync(It.IsAny<string>(), default), Times.Never);
@@ -97,7 +113,7 @@ public class ReportGeneratorServiceTests
 
         var generator = new ReportGeneratorService(chatService.Object);
 
-        var result = await generator.GenerateReportAsync(new ReportRequest("summary"), chunks);
+        var result = await generator.GenerateReportAsync(new ReportRequest("summary"), chunks, ownerId: "");
 
         result.Should().Be("informe final");
         // 2 llamadas map (una por documento) + 1 reduce = 3 en total.
@@ -127,7 +143,7 @@ public class ReportGeneratorServiceTests
             .ReturnsAsync("resumen");
 
         var generator = new ReportGeneratorService(chatService.Object);
-        await generator.GenerateReportAsync(new ReportRequest("summary"), chunks);
+        await generator.GenerateReportAsync(new ReportRequest("summary"), chunks, ownerId: "");
 
         capturedMapPrompt.Should().NotBeNull();
         capturedMapPrompt!.IndexOf("primero", StringComparison.Ordinal)

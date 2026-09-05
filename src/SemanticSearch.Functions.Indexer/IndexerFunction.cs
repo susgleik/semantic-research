@@ -58,7 +58,11 @@ public class IndexerFunction
     private async Task ProcessRecordAsync(S3Event.S3EventNotificationRecord record, ILambdaContext context)
     {
         var bucket = record.S3.Bucket.Name;
-        var key    = Uri.UnescapeDataString(record.S3.Object.Key);
+        // Las notificaciones de eventos S3 codifican los espacios de la key como "+"
+        // (esquema application/x-www-form-urlencoded), no como %20. Uri.UnescapeDataString
+        // no lo decodifica (deja el "+" literal) y busca una key que nunca existe;
+        // WebUtility.UrlDecode sí resuelve ambos casos.
+        var key = System.Net.WebUtility.UrlDecode(record.S3.Object.Key);
 
         if (key.StartsWith("failed/", StringComparison.Ordinal))
         {
@@ -78,7 +82,7 @@ public class IndexerFunction
 
             var (category, docId, filename) = ParseObjectKey(key);
 
-            var content = await _s3ObjectService.DownloadAsync(bucket, key);
+            var (content, ownerId) = await _s3ObjectService.DownloadAsync(bucket, key);
             var text    = _textExtractor.Extract(content, filename);
             var chunks  = _chunker.SlidingWindow(docId, filename, text, WindowSize, Overlap);
 
@@ -96,7 +100,8 @@ public class IndexerFunction
                 Category   = category,
                 Page       = chunk.Page,
                 Status     = "indexed",
-                CreatedAt  = now
+                CreatedAt  = now,
+                OwnerId    = ownerId
             }).ToList();
 
             await _chunkWriter.WriteChunksAsync(records);

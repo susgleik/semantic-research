@@ -3,6 +3,7 @@ using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.DataModel;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
+using SemanticSearch.Core.Auth;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
 using SemanticSearch.Core.Services;
@@ -60,8 +61,9 @@ public class QueryFunction
             return BadRequest("El campo 'query' es obligatorio.");
 
         var topK = queryRequest.TopK > 0 ? queryRequest.TopK : DefaultTopK;
+        var ownerId = CallerIdentity.GetOwnerId(request);
 
-        var cached = await _queryCache.GetAsync(queryRequest.Query, topK);
+        var cached = await _queryCache.GetAsync(queryRequest.Query, topK, ownerId);
         if (cached is not null)
             return JsonResponse(cached);
 
@@ -69,14 +71,14 @@ public class QueryFunction
             [queryRequest.Query], taskType: "RETRIEVAL_QUERY");
         var queryVector = vectors.FirstOrDefault() ?? [];
 
-        var sources = await _similaritySearch.SearchAsync(queryVector, topK);
+        var sources = await _similaritySearch.SearchAsync(queryVector, topK, ownerId);
         var answer = await _ragAnswerService.GenerateAnswerAsync(queryRequest.Query, sources);
 
         var response = new QueryResponse(answer, sources);
 
         try
         {
-            await _queryCache.SetAsync(queryRequest.Query, topK, response);
+            await _queryCache.SetAsync(queryRequest.Query, topK, ownerId, response);
         }
         catch (Exception ex)
         {

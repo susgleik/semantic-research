@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.S3;
+using SemanticSearch.Core.Auth;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
 using SemanticSearch.Functions.Upload.Services;
@@ -83,9 +84,10 @@ public class UploadFunction
         if (!AllowedExtensions.Contains(extension))
             return BadRequest($"Tipo de archivo no soportado. Permitidos: {string.Join(", ", AllowedExtensions)}");
 
+        var ownerId = CallerIdentity.GetOwnerId(request);
         var docId = Guid.NewGuid().ToString();
         var (uploadUrl, _) = await _s3UploadService.CreatePresignedUploadAsync(
-            docId, uploadRequest.Category, uploadRequest.Filename, uploadRequest.ContentType);
+            docId, uploadRequest.Category, uploadRequest.Filename, uploadRequest.ContentType, ownerId);
 
         var response = new UploadResponse(docId, uploadRequest.Filename, "pending", uploadUrl);
 

@@ -4,6 +4,7 @@ using Amazon.DynamoDBv2.DataModel;
 using Amazon.Lambda.APIGatewayEvents;
 using Amazon.Lambda.Core;
 using Amazon.S3;
+using SemanticSearch.Core.Auth;
 using SemanticSearch.Core.Models;
 using SemanticSearch.Core.Options;
 using SemanticSearch.Functions.Reports.Services;
@@ -72,8 +73,9 @@ public class ReportFunction
         if (reportRequest.Scenario == ReportScenarios.Custom && string.IsNullOrWhiteSpace(reportRequest.Instruction))
             return BadRequest("El escenario 'custom' requiere el campo 'instruction'.");
 
+        var ownerId = CallerIdentity.GetOwnerId(request);
         var chunks = await _chunkReader.GetAllChunksAsync();
-        var reportText = await _generator.GenerateReportAsync(reportRequest, chunks);
+        var reportText = await _generator.GenerateReportAsync(reportRequest, chunks, ownerId);
 
         var reportId = Guid.NewGuid().ToString();
         await _storage.SaveReportAsync(reportId, reportText);
