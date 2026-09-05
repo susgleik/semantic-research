@@ -11,6 +11,30 @@ Description: >
          --docker-network semantic-search-net --env-vars env.local.json
 
 Globals:
+  # Réplica del cors_configuration real de infra/apigateway.tf. OJO: esto NO hace que
+  # sam local start-api responda el preflight OPTIONS — es un límite conocido y sin
+  # fix de SAM CLI cuando la API es la implícita (Type: HttpApi en cada evento, sin
+  # AWS::Serverless::HttpApi declarado a mano): local necesita un DefinitionBody de
+  # OpenAPI inline para poder sintetizar esa respuesta, la implícita no lo genera
+  # (https://github.com/aws/aws-sam-cli/issues/3803, /issues/3864). El fix real para
+  # que el frontend funcione contra el backend local está en frontend/src/api/client.ts
+  # (evitar disparar preflight desde el navegador en primer lugar). Se deja esta config
+  # igual porque es inofensiva y agrega los headers CORS a la respuesta real del Lambda.
+  HttpApi:
+    CorsConfiguration:
+      AllowOrigins:
+        - "http://localhost:5173"
+        - "http://127.0.0.1:5173"
+      AllowMethods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      AllowHeaders:
+        - authorization
+        - content-type
+      MaxAge: 300
+
   Function:
     Runtime: dotnet8
     Timeout: 30
