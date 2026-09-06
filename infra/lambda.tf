@@ -76,6 +76,15 @@ resource "aws_iam_role_policy" "indexer" {
         Resource = "${aws_s3_bucket.docs.arn}/*"
       },
       {
+        # s3:ListBucket es un permiso a nivel bucket (Resource sin /*), distinto de
+        # GetObject/PutObject. El SDK de S3 lo pide igual en algunas llamadas (visto
+        # en prod: GetObjectAsync fallaba con AccessDenied en ListBucket) — sin esto
+        # la indexación entera fallaba y el archivo se movía a failed/.
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = aws_s3_bucket.docs.arn
+      },
+      {
         Effect   = "Allow"
         Action   = ["dynamodb:PutItem", "dynamodb:BatchWriteItem", "dynamodb:DescribeTable"]
         Resource = aws_dynamodb_table.chunks.arn

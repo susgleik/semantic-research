@@ -31,8 +31,8 @@ public class QueryCacheServiceTests
         var service = new QueryCacheService(_context.Object, "query-cache", ttlSeconds: 600);
         var response = new QueryResponse("30 dias", []);
 
-        await service.SetAsync("  ¿Cuál es el Plazo?  ", 5, response);
-        var hit = await service.GetAsync("¿cuál es el plazo?", 5);
+        await service.SetAsync("  ¿Cuál es el Plazo?  ", 5, "user-1", response);
+        var hit = await service.GetAsync("¿cuál es el plazo?", 5, "user-1");
 
         hit.Should().NotBeNull();
         hit!.Answer.Should().Be("30 dias");
@@ -42,9 +42,9 @@ public class QueryCacheServiceTests
     public async Task GetAsync_DifferentTopK_IsACacheMiss()
     {
         var service = new QueryCacheService(_context.Object, "query-cache", ttlSeconds: 600);
-        await service.SetAsync("pregunta", 5, new QueryResponse("respuesta", []));
+        await service.SetAsync("pregunta", 5, "user-1", new QueryResponse("respuesta", []));
 
-        var hit = await service.GetAsync("pregunta", 10);
+        var hit = await service.GetAsync("pregunta", 10, "user-1");
 
         hit.Should().BeNull();
     }
@@ -53,9 +53,22 @@ public class QueryCacheServiceTests
     public async Task GetAsync_ExpiredEntry_ReturnsNull()
     {
         var service = new QueryCacheService(_context.Object, "query-cache", ttlSeconds: -1);
-        await service.SetAsync("pregunta vieja", 5, new QueryResponse("respuesta", []));
+        await service.SetAsync("pregunta vieja", 5, "user-1", new QueryResponse("respuesta", []));
 
-        var hit = await service.GetAsync("pregunta vieja", 5);
+        var hit = await service.GetAsync("pregunta vieja", 5, "user-1");
+
+        hit.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetAsync_SameQueryDifferentOwnerId_IsACacheMiss()
+    {
+        // Regresión del fix de fuga cruzada entre usuarios: dos owners distintos con
+        // la misma query+topK no deben compartir la entrada de cache.
+        var service = new QueryCacheService(_context.Object, "query-cache", ttlSeconds: 600);
+        await service.SetAsync("pregunta", 5, "user-1", new QueryResponse("respuesta de user-1", []));
+
+        var hit = await service.GetAsync("pregunta", 5, "user-2");
 
         hit.Should().BeNull();
     }

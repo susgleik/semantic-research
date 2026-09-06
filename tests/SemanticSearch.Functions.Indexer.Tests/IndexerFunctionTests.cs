@@ -50,7 +50,7 @@ public class IndexerFunctionTests
         const string text = "hello world this is a short contract";
         _textExtractor.Setup(t => t.Extract(It.IsAny<byte[]>(), "informe.pdf")).Returns(text);
         _s3ObjectService.Setup(s => s.DownloadAsync("docs", "contratos/doc-1/informe.pdf", default))
-            .ReturnsAsync([1, 2, 3]);
+            .ReturnsAsync(new S3ObjectContent([1, 2, 3], ""));
         _embeddingService
             .Setup(e => e.EmbedBatchAsync(It.IsAny<IEnumerable<string>>(), "RETRIEVAL_DOCUMENT", default))
             .ReturnsAsync([new float[] { 0.1f, 0.2f }]);
@@ -68,7 +68,32 @@ public class IndexerFunctionTests
         written.Should().HaveCount(1);
         written![0].DocumentId.Should().Be("doc-1");
         written[0].Filename.Should().Be("informe.pdf");
+        written[0].OwnerId.Should().Be("");
         _s3ObjectService.Verify(s => s.MoveToFailedAsync(It.IsAny<string>(), It.IsAny<string>(), default), Times.Never);
+    }
+
+    [Fact]
+    public async Task FunctionHandler_S3ObjectHasOwnerMetadata_StampsOwnerIdOnChunks()
+    {
+        const string text = "hello world this is a short contract";
+        _textExtractor.Setup(t => t.Extract(It.IsAny<byte[]>(), "informe.pdf")).Returns(text);
+        _s3ObjectService.Setup(s => s.DownloadAsync("docs", "contratos/doc-1/informe.pdf", default))
+            .ReturnsAsync(new S3ObjectContent([1, 2, 3], "user-1"));
+        _embeddingService
+            .Setup(e => e.EmbedBatchAsync(It.IsAny<IEnumerable<string>>(), "RETRIEVAL_DOCUMENT", default))
+            .ReturnsAsync([new float[] { 0.1f, 0.2f }]);
+
+        List<ChunkRecord>? written = null;
+        _chunkWriter
+            .Setup(w => w.WriteChunksAsync(It.IsAny<IEnumerable<ChunkRecord>>(), default))
+            .Callback<IEnumerable<ChunkRecord>, CancellationToken>((chunks, _) => written = chunks.ToList())
+            .Returns(Task.CompletedTask);
+
+        var s3Event = BuildEvent("docs", "contratos/doc-1/informe.pdf", 1024);
+
+        await CreateFunction().FunctionHandler(s3Event, _context.Object);
+
+        written.Should().ContainSingle().Which.OwnerId.Should().Be("user-1");
     }
 
     [Fact]
@@ -89,7 +114,7 @@ public class IndexerFunctionTests
     public async Task FunctionHandler_ExtractionFails_MovesToFailed()
     {
         _s3ObjectService.Setup(s => s.DownloadAsync("docs", "contratos/doc-3/roto.pdf", default))
-            .ReturnsAsync([1, 2, 3]);
+            .ReturnsAsync(new S3ObjectContent([1, 2, 3], ""));
         _textExtractor.Setup(t => t.Extract(It.IsAny<byte[]>(), "roto.pdf"))
             .Throws(new NotSupportedException("archivo corrupto"));
 
@@ -108,5 +133,25 @@ public class IndexerFunctionTests
         await CreateFunction().FunctionHandler(s3Event, _context.Object);
 
         _s3ObjectService.Verify(s => s.MoveToFailedAsync("docs", "sin-formato-valido.pdf", default), Times.Once);
+    }
+
+    [Fact]
+    public async Task FunctionHandler_FilenameWithSpacesEncodedAsPlus_DecodesKeyCorrectly()
+    {
+        // Las notificaciones de S3 codifican los espacios de la key como "+", no "%20".
+        const string text = "contenido de prueba";
+        _textExtractor.Setup(t => t.Extract(It.IsAny<byte[]>(), "informe final.pdf")).Returns(text);
+        _s3ObjectService.Setup(s => s.DownloadAsync("docs", "contratos/doc-4/informe final.pdf", default))
+            .ReturnsAsync(new S3ObjectContent([1, 2, 3], ""));
+        _embeddingService
+            .Setup(e => e.EmbedBatchAsync(It.IsAny<IEnumerable<string>>(), "RETRIEVAL_DOCUMENT", default))
+            .ReturnsAsync([new float[] { 0.1f, 0.2f }]);
+
+        var s3Event = BuildEvent("docs", "contratos/doc-4/informe+final.pdf", 1024);
+
+        await CreateFunction().FunctionHandler(s3Event, _context.Object);
+
+        _s3ObjectService.Verify(s => s.DownloadAsync("docs", "contratos/doc-4/informe final.pdf", default), Times.Once);
+        _s3ObjectService.Verify(s => s.MoveToFailedAsync(It.IsAny<string>(), It.IsAny<string>(), default), Times.Never);
     }
 }

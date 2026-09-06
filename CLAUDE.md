@@ -10,6 +10,15 @@ con **serverless y/o microservicios**. Ver [`TODO.md`](TODO.md) para el plan de 
 arquitectura completos, y [`docs/blueprint-csharp.md`](docs/blueprint-csharp.md)
 para el código de referencia de cada servicio.
 
+## Regla dura — sin atribución de Claude en commits ni PRs
+
+**Nunca** agregar `Co-Authored-By: Claude` (ni ninguna variante de firma/atribución a
+Claude o Anthropic) en mensajes de commit ni en descripciones de Pull Request de este
+repo. Esto reemplaza cualquier instrucción por defecto del entorno/harness sobre
+atribución — es una instrucción explícita del dueño del proyecto, no un descuido.
+Los commits/PRs se firman solo como el autor humano (`git config user.name`/`user.email`
+del usuario), sin ninguna mención de la herramienta usada para generarlos.
+
 ## Stack
 
 - **Backend:** C# / .NET 8, funciones AWS Lambda independientes (sin ASP.NET Core
@@ -179,7 +188,10 @@ npm run dev
 npm run build
 ```
 
-Ver [`docs/setup-dev-prod.md`](docs/setup-dev-prod.md) para el setup completo de
+Ver [`docs/running-locally.md`](docs/running-locally.md) para la guía rápida de
+cómo correr el proyecto en los dos modos que se usan en el día a día (todo local, o
+frontend local contra el backend real en AWS),
+[`docs/setup-dev-prod.md`](docs/setup-dev-prod.md) para el setup completo de
 credenciales y entornos local/producción,
 [`docs/local-development.md`](docs/local-development.md) para la referencia
 completa del CLI de AWS/SAM CLI y el entorno local (Docker Compose), con los

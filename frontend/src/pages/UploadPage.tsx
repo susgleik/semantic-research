@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createUpload, uploadFileToS3 } from '../api/client';
+import { createUpload, getOwnerId, uploadFileToS3 } from '../api/client';
 import { bannerStyle, cardStyle, fieldLabelStyle, fieldStyle } from '../styles';
 
 const ALLOWED_EXTENSIONS = ['.pdf', '.docx'];
@@ -41,7 +41,7 @@ export default function UploadPage() {
         contentType,
       });
 
-      await uploadFileToS3(uploadUrl, file, contentType);
+      await uploadFileToS3(uploadUrl, file, contentType, getOwnerId() ?? undefined);
 
       setState({ status: 'done', docId, filename: file.name });
     } catch (err) {

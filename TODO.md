@@ -382,6 +382,11 @@ descarga.
       CloudFront y quedó probado corriéndolo a mano; falta engancharlo a un workflow
       de GitHub Actions (mismo patrón OIDC que `deploy.yml`) para que corra solo en
       push a `main`
+    - Bug real confirmado 2026-07-21: `deploy.yml` mergeó y deployó un fix de
+      `frontend/src/App.tsx` (logout no limpiaba la sesión OIDC) sin tocar el
+      frontend en absoluto — el bundle servido por CloudFront quedó desactualizado
+      hasta correr `deploy-frontend.ps1` a mano. Sin este workflow, todo cambio de
+      frontend que se mergea a `main` queda silenciosamente sin desplegar.
 - [x] Configurar **OIDC** entre GitHub Actions y AWS — `infra/oidc.tf`:
       `aws_iam_openid_connect_provider` + rol `semantic-search-github-actions-deploy`
       con trust policy limitada a `repo:susgleik/semantic-research` en `main` (ni PRs
@@ -441,6 +446,82 @@ descarga.
         CloudWatch/SNS, se agregaron en `infra/oidc.tf` (scoped a `semantic-search-*`)
 - [ ] Confirmar que el AWS Budget Alert está activo — no verificable con el usuario IAM
       de despliegue (sin permiso `budgets:ViewBudget`, ver Fase 0), confirmar a mano
+
+---
+
+## Fase 15 — Backlog post-lanzamiento (UX, costos, runtime)
+
+> Hallazgos de uso real de la app ya desplegada (2026-08-15), no bugs de una sesión de
+> desarrollo puntual — quedan como backlog priorizable.
+
+- [x] **Aislamiento de documentos por usuario (multi-tenancy)** — implementado. Root
+      cause confirmado: `ChunkRecord` no tenía atributo de owner, y aunque el JWT de
+      Cognito ya llegaba validado a cada Lambda (Fase 6), ninguno lo leía —
+      `documents-service`/`query-service`/`report-service` hacían `Scan` completo sin
+      filtrar por identidad.
+      - `ChunkRecord.OwnerId` (Core) poblado al indexar con el `sub` del JWT del
+        usuario que sube el archivo. Ownership viaja Upload → S3 (metadata del objeto,
+        `x-amz-meta-owner-id`, no la key) → Indexer, que lo estampa en cada chunk.
+        Helper compartido `SemanticSearch.Core.Auth.CallerIdentity.GetOwnerId` (4
+        Lambdas HTTP: Upload, Documents, Query, Reports).
+      - **Sin GSI nuevo** — se mantiene el `Scan` + filtro en memoria ya documentado
+        como trade-off aceptado (Fases 4/5/11); filtro aplicado en
+        `documents-service`/`query-service`/`report-service` antes de agrupar/rankear.
+      - **Decisión de producto**: chunks legacy (`OwnerId` vacío, indexados antes de
+        este cambio) se tratan como **compartidos** — visibles, reindexables y
+        borrables por cualquier usuario autenticado. Sin pérdida de datos, sin
+        necesidad de reindexar a mano.
+      - Dos bugs reales encontrados durante el diseño, corregidos en el mismo cambio:
+        (1) `S3DocumentService.TriggerReindexAsync` usaba
+        `MetadataDirective = REPLACE` sin volver a setear `.Metadata` — cada reindex
+        hubiera borrado el `owner-id` del objeto; (2) `QueryCacheService` hasheaba
+        `query + topK` sin dimensión de usuario — sin el fix, la respuesta cacheada de
+        un usuario se filtraba a cualquier otro que hiciera la misma pregunta.
+      - Gap aceptado, fuera de alcance: `GET /reports/{reportId}` sigue sin ACL
+        (protegido solo por lo impredecible del GUID) — el contenido del reporte ya se
+        genera con el corpus filtrado por owner, pero la descarga en sí no valida quién
+        pide el `reportId`.
+      - Pendiente de verificación manual: round-trip completo contra LocalStack (Fase
+        12) con dos usuarios de Cognito reales, confirmando que la firma de la URL
+        prefirmada con metadata funciona end-to-end (`POST /upload` → PUT con header
+        `x-amz-meta-owner-id` → evento S3 → `indexer-service` → chunk con `OwnerId` en
+        DynamoDB Local).
+- [ ] **Preview de documento en `DocumentsPage.tsx`** — agregar un botón "Ver" junto a
+      "Reindexar"/"Eliminar" en la lista de documentos que abra el archivo original
+      (PDF/Word) en vez de solo mostrar metadata. Evaluar: URL prefirmada de S3 GET
+      (mismo patrón que `upload-service`, TTL corto) servida en una nueva pestaña o un
+      visor embebido (`<iframe>` para PDF; `.docx` necesitaría conversión o descarga
+      directa, no hay visor nativo de navegador para Word).
+- [ ] **Cachear la vista de documentos en el frontend** — hoy `DocumentsPage.tsx` vuelve
+      a pegarle a `GET /documents` (y por lo tanto a `documents-service`, que hace un
+      `Scan` completo de `chunks`, Fase 5) cada vez que el usuario visita el tab, aunque
+      la lista no haya cambiado. Evaluar `@tanstack/react-query` (cache + staleTime) o
+      un cache simple en memoria/`sessionStorage` con invalidación manual tras
+      subir/reindexar/borrar un documento. Reduce Scans innecesarios — relevante para
+      costo real de DynamoDB ahora que no hay margen de crédito gratis (ver
+      [`CLAUDE.md`](CLAUDE.md#por-qué-esta-arquitectura-decisiones-no-obvias)).
+- [ ] **CI/CD del frontend** — mismo pendiente ya anotado en Fase 13
+      (`deploy-frontend.yml`), subido de prioridad: hoy todo merge a `main` que toca
+      `frontend/` no se despliega solo, y ya causó un incidente real (bundle
+      desactualizado en CloudFront tras el fix de logout, ver Fase 13). Automatizar
+      `infra/scripts/deploy-frontend.ps1` en un workflow nuevo con el mismo patrón OIDC
+      de `deploy.yml`, disparado solo cuando el diff toca `frontend/**`.
+- [ ] **Migrar las 5 Lambdas de `dotnet8` a un runtime soportado** — AWS avisó
+      (AWS Health, 2026-08-15) que .NET 8 en Lambda deja de tener soporte el
+      **2026-11-10** (sigue el EOL de .NET 8 en esa misma fecha), sin poder crear
+      funciones nuevas en ese runtime desde 2027-02-01 ni actualizar las existentes
+      desde 2027-03-03. No es urgente en lo inmediato (las funciones siguen
+      ejecutando), pero hay que planearlo con tiempo:
+      - Runtime managed más nuevo que soporta Lambda nativamente hoy es `dotnet10`
+        (confirmar versión exacta disponible al momento de migrar). Cambiar
+        `runtime = "dotnet8"` en `infra/lambda.tf` (5 recursos `aws_lambda_function`) +
+        el target framework de los 5 `.csproj` de `Functions.*` (ver nota de
+        [`CLAUDE.md`](CLAUDE.md#stack) sobre por qué se fijó `net8.0` en su momento —
+        era el runtime nativo más nuevo disponible, ya no lo es).
+      - Correr `dotnet test` completo tras el bump de target framework antes de tocar
+        Terraform — riesgo principal es algún paquete (`PdfPig`,
+        `DocumentFormat.OpenXml`, `AWSSDK.*`) sin compatibilidad todavía con el nuevo
+        TFM.
 
 ---
 

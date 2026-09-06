@@ -7,9 +7,9 @@ public class ReportGeneratorService(IReportChatService chatService) : IReportGen
     private const string NoMatchesMessage = "No hay documentos que coincidan con los filtros indicados.";
 
     public async Task<string> GenerateReportAsync(
-        ReportRequest request, IReadOnlyList<ChunkRecord> chunks, CancellationToken ct = default)
+        ReportRequest request, IReadOnlyList<ChunkRecord> chunks, string ownerId, CancellationToken ct = default)
     {
-        var filtered = FilterChunks(chunks, request);
+        var filtered = FilterChunks(chunks, request, ownerId);
         if (filtered.Count == 0)
             return NoMatchesMessage;
 
@@ -38,9 +38,9 @@ public class ReportGeneratorService(IReportChatService chatService) : IReportGen
         return await chatService.GenerateAsync(reducePrompt, ct);
     }
 
-    public static IReadOnlyList<ChunkRecord> FilterChunks(IReadOnlyList<ChunkRecord> chunks, ReportRequest request)
+    public static IReadOnlyList<ChunkRecord> FilterChunks(IReadOnlyList<ChunkRecord> chunks, ReportRequest request, string ownerId)
     {
-        IEnumerable<ChunkRecord> result = chunks;
+        IEnumerable<ChunkRecord> result = chunks.Where(c => c.OwnerId == ownerId || string.IsNullOrEmpty(c.OwnerId));
 
         if (!string.IsNullOrWhiteSpace(request.Category))
             result = result.Where(c => c.Category == request.Category);

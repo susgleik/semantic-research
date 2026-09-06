@@ -5,12 +5,15 @@ namespace SemanticSearch.Functions.Indexer.Services;
 
 public class S3ObjectService(IAmazonS3 s3Client) : IS3ObjectService
 {
-    public async Task<byte[]> DownloadAsync(string bucket, string key, CancellationToken ct = default)
+    public async Task<S3ObjectContent> DownloadAsync(string bucket, string key, CancellationToken ct = default)
     {
         using var response = await s3Client.GetObjectAsync(bucket, key, ct);
         using var memoryStream = new MemoryStream();
         await response.ResponseStream.CopyToAsync(memoryStream, ct);
-        return memoryStream.ToArray();
+
+        // El SDK expone la metadata de usuario (x-amz-meta-owner-id) sin el prefijo.
+        var ownerId = response.Metadata["owner-id"] ?? "";
+        return new S3ObjectContent(memoryStream.ToArray(), ownerId);
     }
 
     public async Task MoveToFailedAsync(string bucket, string key, CancellationToken ct = default)

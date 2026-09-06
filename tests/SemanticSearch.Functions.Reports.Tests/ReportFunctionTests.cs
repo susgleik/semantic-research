@@ -34,7 +34,7 @@ public class ReportFunctionTests
     {
         _chunkReader.Setup(r => r.GetAllChunksAsync(default)).ReturnsAsync([]);
         _generator
-            .Setup(g => g.GenerateReportAsync(It.IsAny<ReportRequest>(), It.IsAny<IReadOnlyList<ChunkRecord>>(), default))
+            .Setup(g => g.GenerateReportAsync(It.IsAny<ReportRequest>(), It.IsAny<IReadOnlyList<ChunkRecord>>(), It.IsAny<string>(), default))
             .ReturnsAsync("informe generado");
         _storage.Setup(s => s.SaveReportAsync(It.IsAny<string>(), "informe generado", default)).Returns(Task.CompletedTask);
         _storage.Setup(s => s.GetDownloadUrlAsync(It.IsAny<string>(), default)).ReturnsAsync("https://example.com/report.md");
@@ -57,7 +57,7 @@ public class ReportFunctionTests
 
         response.StatusCode.Should().Be(400);
         _generator.Verify(
-            g => g.GenerateReportAsync(It.IsAny<ReportRequest>(), It.IsAny<IReadOnlyList<ChunkRecord>>(), It.IsAny<CancellationToken>()),
+            g => g.GenerateReportAsync(It.IsAny<ReportRequest>(), It.IsAny<IReadOnlyList<ChunkRecord>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

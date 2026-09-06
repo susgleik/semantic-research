@@ -127,10 +127,15 @@ Gemini) están en `Globals.Function.Environment.Variables`.
 placeholder necesario (ver gotcha en la sección 7) para que `--env-vars` pueda
 sobrescribirla con el valor real.
 
-`Globals.HttpApi.CorsConfiguration` habilita CORS para que el frontend (Vite,
-`localhost:5173`) pueda llamar a la API — ver la sección 8 para el resto de lo que
-hace falta para que el frontend funcione contra este entorno (no alcanza solo con
-esto).
+**Corrección (2026-09):** este archivo afirmaba que había un
+`Globals.HttpApi.CorsConfiguration` en `template.local.yaml` — nunca existió (ver
+`git log -S "CorsConfiguration"`, ni siquiera en el commit que agregó esta frase). No
+hace falta: `sam local start-api` es un emulador liviano, no la API Gateway real, y
+no aplica las reglas de CORS de HTTP API sobre el preflight `OPTIONS` como sí hace
+AWS real — por eso `/documents`, `/query`, etc. nunca tuvieron problema de CORS desde
+el frontend, con o sin esa config. El único CORS que sí es real y enforced en local
+es el del **bucket S3** (sección 7, "Falta CORS en el bucket S3"), porque LocalStack
+sí emula S3 fielmente.
 
 ### `env.local.json` (no se commitea)
 
@@ -330,19 +335,55 @@ el navegador sí:
    contra un endpoint local. Ver `S3UploadService.cs` y `ReportStorageService.cs`.
 3. **Falta CORS en el bucket S3.** Un `PUT`/`GET` desde el navegador a una URL
    prefirmada de S3 dispara preflight `OPTIONS` igual que cualquier otro request
-   cross-origin — esto es CORS *del bucket*, independiente del CORS de API Gateway
-   (`Globals.HttpApi.CorsConfiguration` en el template). Sin una política CORS en el
-   bucket, el navegador bloquea el `PUT` **silenciosamente antes de mandarlo**: no
-   aparece ningún log ni en `sam local start-api` ni en LocalStack, lo que lo hace
-   parecer un problema de backend cuando no lo es. **Solución:** `aws s3api
-   put-bucket-cors` sobre `docs` y `reports` en el contenedor `setup` de
-   `docker-compose.yml`, permitiendo el origen `http://localhost:5173`.
+   cross-origin — esto es CORS *del bucket*, independiente del CORS de la API
+   (sección siguiente). Sin una política CORS en el bucket, el navegador bloquea el
+   `PUT` **silenciosamente antes de mandarlo**: no aparece ningún log ni en
+   `sam local start-api` ni en LocalStack, lo que lo hace parecer un problema de
+   backend cuando no lo es. **Solución:** `aws s3api put-bucket-cors` sobre `docs` y
+   `reports` en el contenedor `setup` de `docker-compose.yml`, permitiendo el origen
+   `http://localhost:5173`.
 
 **Cómo diagnosticar esto en el futuro:** si `POST /upload` devuelve 200 pero el
 archivo no aparece en `/documents` tras indexarlo, primero confirmar si el objeto
 llegó a S3 (`aws --endpoint-url=http://localhost:4566 s3api list-objects-v2 --bucket
 docs`) antes de sospechar del código del indexer — si no está en S3, el problema es
 la subida (esta sección), no la indexación.
+
+### El frontend no puede llamar a ninguna ruta de la API (`/documents`, `/query`, ...) contra el backend local — `403 {"message":"Missing Authentication Token"}` en el preflight `OPTIONS`
+
+Encontrado 2026-09-05 probando el frontend real (no `curl`) contra `sam local
+start-api` por primera vez de punta a punta. Síntoma: **cualquier** llamada del
+frontend al backend local falla en el navegador (Network tab muestra el `OPTIONS`
+en rojo, nunca llega a hacerse el `GET`/`POST` real), aunque la misma URL responda
+perfecto con `curl`.
+
+**Causa raíz — límite conocido y sin fix de SAM CLI, no un bug de este proyecto:**
+`client.ts` manda `Content-Type: application/json` en *todas* las llamadas
+(incluso `GET` sin body), lo que el navegador considera un header "no simple" y
+dispara un preflight `OPTIONS` antes de cualquier request cross-origin. Real API
+Gateway HTTP API resuelve ese preflight **a nivel de gateway**, sin invocar ningún
+Lambda — pero `sam local start-api`, cuando la API es la implícita (como acá:
+`Type: HttpApi` en cada evento de `template.local.yaml`, sin declarar
+`AWS::Serverless::HttpApi` a mano), **no puede sintetizar esa respuesta**: necesita
+que la API tenga un `DefinitionBody` de OpenAPI inline, que la API implícita no
+genera. Agregar `Globals.HttpApi.CorsConfiguration` al template (ver sección 4) no
+lo arregla — es inofensivo y refleja la config real de `infra/apigateway.tf`, pero
+el preflight sigue devolviendo 403 igual. Confirmado con los issues abiertos de AWS:
+[aws/aws-sam-cli#3803](https://github.com/aws/aws-sam-cli/issues/3803) y
+[aws/aws-sam-cli#3864](https://github.com/aws/aws-sam-cli/issues/3864) (mismo
+mensaje de error exacto).
+
+**Solución real:** evitar que el navegador dispare el preflight en primer lugar,
+ya que los Lambdas nunca validan el `Content-Type` (`JsonSerializer.Deserialize(request.Body
+?? "")` ignora el header por completo). En `frontend/src/api/client.ts`:
+- No mandar `Content-Type` en absoluto si la request no tiene body (los `GET`/`DELETE`).
+- Cuando sí hay body, usar `text/plain;charset=UTF-8` en vez de `application/json`
+  — es uno de los 3 valores "CORS-safelisted" que el navegador nunca preflightea.
+
+En Modo B (frontend local contra backend real en AWS, `npm run dev:cloud`) esto no
+hace falta: ahí sí hay `Authorization: Bearer <jwt>` real, que igual dispara
+preflight sin importar el `Content-Type` — pero como ese preflight lo resuelve la
+API Gateway real (no `sam local`), nunca fue un problema en ese modo.
 
 ---
 
@@ -361,10 +402,12 @@ Puntos a tener en cuenta:
 
 - **Puerto fijo (`5173`).** `vite.config.ts` tiene `server.port = 5173` +
   `strictPort: true` a propósito: si Vite saltara a otro puerto (5174, 5175...) por
-  tenerlo ocupado, dejaría de matchear el origen autorizado en
-  `Globals.HttpApi.CorsConfiguration` de `template.local.yaml` y todo fallaría con
-  errores de CORS. Si `npm run dev` falla con "Port 5173 is already in use", hay un
-  proceso zombie — en Windows, matar el proceso `npm run dev`/`vite` a veces no mata
+  tenerlo ocupado, dejaría de matchear el origen autorizado en la política CORS de
+  los buckets `docs`/`reports` (`aws s3api put-bucket-cors` en el contenedor `setup`
+  de `docker-compose.yml`, hardcodeada a `http://localhost:5173`/`http://127.0.0.1:5173`)
+  y el navegador bloquearía el `PUT` a la URL prefirmada de S3 al subir un archivo. Si
+  `npm run dev` falla con "Port 5173 is already in use", hay un proceso zombie — en
+  Windows, matar el proceso `npm run dev`/`vite` a veces no mata
   el proceso `node` hijo real; buscar quién ocupa el puerto con
   `Get-NetTCPConnection -LocalPort 5173 | Select OwningProcess` y matarlo con
   `Stop-Process -Id <pid> -Force`.

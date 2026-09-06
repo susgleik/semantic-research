@@ -7,7 +7,7 @@ namespace SemanticSearch.Functions.Documents.Services;
 public class DocumentRegistryService(IDynamoDBContext context, DynamoDbOptions options) : IDocumentRegistryService
 {
     public async Task<(IReadOnlyList<DocumentSummary> Documents, int Total)> ListDocumentsAsync(
-        int limit, int offset, CancellationToken ct = default)
+        string ownerId, int limit, int offset, CancellationToken ct = default)
     {
         // Scan completo de la tabla de chunks — no existe una tabla "documents" separada,
         // se agrupa por DocumentId en memoria. Viable para un corpus académico; ver
@@ -15,8 +15,12 @@ public class DocumentRegistryService(IDynamoDBContext context, DynamoDbOptions o
         var config = new DynamoDBOperationConfig { OverrideTableName = options.TableName };
         var chunks = await context.ScanAsync<ChunkRecord>([], config).GetRemainingAsync(ct);
 
-        return GroupAndPaginate(chunks, limit, offset);
+        return GroupAndPaginate(FilterVisible(chunks, ownerId), limit, offset);
     }
+
+    /// <summary>Documentos propios + legacy/compartidos (OwnerId vacío). Extraído para testearse sin el SDK.</summary>
+    public static IReadOnlyList<ChunkRecord> FilterVisible(IReadOnlyList<ChunkRecord> chunks, string ownerId) =>
+        chunks.Where(c => c.OwnerId == ownerId || string.IsNullOrEmpty(c.OwnerId)).ToList();
 
     /// <summary>Agrupa chunks en resúmenes de documento y pagina el resultado. Extraído para poder testearse sin el SDK de DynamoDB.</summary>
     public static (IReadOnlyList<DocumentSummary> Documents, int Total) GroupAndPaginate(

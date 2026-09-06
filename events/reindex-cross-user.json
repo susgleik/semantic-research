@@ -1,0 +1,17 @@
+{
+  "_comment": "Simula a user-2 pidiendo reindexar un doc marcado como de user-1 en DynamoDB Local — debe devolver 404 (no 202). Reemplazar el docId en rawPath/pathParameters por el docId real de user-1 antes de invocar.",
+  "version": "2.0",
+  "routeKey": "POST /reindex/{docId}",
+  "rawPath": "/reindex/REEMPLAZAR-CON-DOCID-DE-USER-1",
+  "requestContext": {
+    "http": { "method": "POST", "path": "/reindex/REEMPLAZAR-CON-DOCID-DE-USER-1" },
+    "authorizer": {
+      "jwt": {
+        "claims": { "sub": "user-2" },
+        "scopes": null
+      }
+    }
+  },
+  "pathParameters": { "docId": "REEMPLAZAR-CON-DOCID-DE-USER-1" },
+  "isBase64Encoded": false
+}

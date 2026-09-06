@@ -25,4 +25,8 @@ public class ChunkRecord
     public string Status { get; set; } = "indexed";
 
     public string CreatedAt { get; set; } = "";
+
+    // "" = chunk legacy o subido sin JWT (dev local) — se trata como compartido con
+    // cualquier usuario autenticado, ver CallerIdentity.GetOwnerId.
+    public string OwnerId { get; set; } = "";
 }

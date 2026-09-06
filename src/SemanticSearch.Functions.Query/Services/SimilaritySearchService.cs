@@ -5,9 +5,10 @@ namespace SemanticSearch.Functions.Query.Services;
 public class SimilaritySearchService(IDynamoChunkReader chunkReader) : ISimilaritySearchService
 {
     public async Task<IReadOnlyList<SourceChunk>> SearchAsync(
-        ReadOnlyMemory<float> queryVector, int topK, CancellationToken ct = default)
+        ReadOnlyMemory<float> queryVector, int topK, string ownerId, CancellationToken ct = default)
     {
-        var chunks = await chunkReader.GetAllChunksAsync(ct);
+        var chunks = (await chunkReader.GetAllChunksAsync(ct))
+            .Where(c => c.OwnerId == ownerId || string.IsNullOrEmpty(c.OwnerId));
 
         return chunks
             .Select(chunk => new

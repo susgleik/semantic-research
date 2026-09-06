@@ -6,7 +6,7 @@ import DocumentsPage from './pages/DocumentsPage';
 import QueryPage from './pages/QueryPage';
 import ReportsPage from './pages/ReportsPage';
 import { authEnabled, cognitoLogoutUrl } from './auth/config';
-import { setAuthToken } from './api/client';
+import { setAuthToken, setOwnerId } from './api/client';
 
 function navLinkStyle({ isActive }: { isActive: boolean }): React.CSSProperties {
   return {
@@ -176,6 +176,7 @@ function AuthGate() {
 
   useEffect(() => {
     setAuthToken(auth.user?.access_token ?? null);
+    setOwnerId(auth.user?.profile.sub ?? null);
   }, [auth.user]);
 
   useEffect(() => {

@@ -6,7 +6,7 @@ namespace SemanticSearch.Functions.Documents.Tests;
 
 public class DocumentRegistryServiceGroupAndPaginateTests
 {
-    private static ChunkRecord Chunk(string docId, string chunkId, string status, string createdAt) => new()
+    private static ChunkRecord Chunk(string docId, string chunkId, string status, string createdAt, string ownerId = "") => new()
     {
         DocumentId = docId,
         ChunkId    = chunkId,
@@ -15,7 +15,8 @@ public class DocumentRegistryServiceGroupAndPaginateTests
         Filename   = $"{docId}.pdf",
         Category   = "contratos",
         Status     = status,
-        CreatedAt  = createdAt
+        CreatedAt  = createdAt,
+        OwnerId    = ownerId
     };
 
     [Fact]
@@ -76,5 +77,34 @@ public class DocumentRegistryServiceGroupAndPaginateTests
         total.Should().Be(5);
         documents.Should().HaveCount(2);
         documents.Select(d => d.DocId).Should().Equal("doc-4", "doc-3");
+    }
+
+    [Fact]
+    public void FilterVisible_ReturnsOwnAndLegacySharedChunks_ExcludesOtherOwners()
+    {
+        var chunks = new List<ChunkRecord>
+        {
+            Chunk("doc-mine", "chunk-000001", "indexed", "2026-01-01T00:00:00Z", ownerId: "user-1"),
+            Chunk("doc-shared", "chunk-000001", "indexed", "2026-01-01T00:00:00Z", ownerId: ""),
+            Chunk("doc-other", "chunk-000001", "indexed", "2026-01-01T00:00:00Z", ownerId: "user-2")
+        };
+
+        var visible = DocumentRegistryService.FilterVisible(chunks, "user-1");
+
+        visible.Select(c => c.DocumentId).Should().BeEquivalentTo(["doc-mine", "doc-shared"]);
+    }
+
+    [Fact]
+    public void FilterVisible_CallerWithoutOwnerId_SeesOnlyLegacySharedChunks()
+    {
+        var chunks = new List<ChunkRecord>
+        {
+            Chunk("doc-shared", "chunk-000001", "indexed", "2026-01-01T00:00:00Z", ownerId: ""),
+            Chunk("doc-other", "chunk-000001", "indexed", "2026-01-01T00:00:00Z", ownerId: "user-2")
+        };
+
+        var visible = DocumentRegistryService.FilterVisible(chunks, "");
+
+        visible.Select(c => c.DocumentId).Should().BeEquivalentTo(["doc-shared"]);
     }
 }
